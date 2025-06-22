@@ -1,4 +1,5 @@
 from typing import Callable, List, Type, TypeVar, Dict, Any, Optional, Union, Generic
+import uuid
 
 from beta.util import extract_uuid, generate_safe_file_name
 from mainLogic.utils.Endpoint import Endpoint
@@ -25,12 +26,18 @@ T = TypeVar('T') # T represents the specific model type when model_class is used
 class Endpoints:
     def __init__(self, verbose=False):
         self.verbose = verbose
+        self.random_id = str(uuid.uuid4())
         self.DEFAULT_HEADERS = {
-            'client-id': '5eb393ee95fab7468a79d189',
-            'client-type': 'WEB',
+            "randomId": self.random_id,
+            "sec-ch-ua": '"Google Chrome";v="129", "Not=A?Brand";v="8", "Chromium";v="129"',
+            "sec-ch-ua-mobile": "?0",
+            "client-type": "WEB",
+            "client-id": "5eb393ee95fab7468a79d189",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Authorization": "Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJleHAiOjE3NTEwOTUzMDIuMTM1LCJkYXRhIjp7Il9pZCI6IjY0MmNmZmIzNTBhZWVjMDAxOGYyM2UxYiIsInVzZXJuYW1lIjoiOTA5MzYzNzUwNyIsImZpcnN0TmFtZSI6IkFuaWsiLCJsYXN0TmFtZSI6IiIsIm9yZ2FuaXphdGlvbiI6eyJfaWQiOiI1ZWIzOTNlZTk1ZmFiNzQ2OGE3OWQxODkiLCJ3ZWJzaXRlIjoicGh5c2ljc3dhbGxhaC5jb20iLCJuYW1lIjoiUGh5c2ljc3dhbGxhaCJ9LCJlbWFpbCI6ImFuaWt4cHJvMDBAZ21haWwuY29tIiwicm9sZXMiOlsiNWIyN2JkOTY1ODQyZjk1MGE3NzhjNmVmIl0sImNvdW50cnlHcm91cCI6IklOIiwib25lUm9sZXMiOltdLCJ0eXBlIjoiVVNFUiJ9LCJpYXQiOjE3NTA0OTA1MDJ9.-tzigxUtK77MOwPhMA7xLBo9A-7mRWT9pm2AwbUiYSc"
         }
         self.token = None
-        self.random_id = None
 
         class API:
             def __init__(self, outer):
@@ -154,12 +161,14 @@ class Endpoints:
         }
 
 
-    def set_token(self, token: str, random_id: str = "a3e290fa-ea36-4012-9124-8908794c33aa") -> 'Endpoints':
+    def set_token(self, token: str, random_id: str = None) -> 'Endpoints':
         self.token = token
-        self.DEFAULT_HEADERS.setdefault('Authorization', 'Bearer ' + self.token)
-        if random_id:
+        self.DEFAULT_HEADERS['Authorization'] = 'Bearer ' + self.token
+        if random_id is None:
+            self.random_id = str(uuid.uuid4())
+        else:
             self.random_id = random_id
-            self.DEFAULT_HEADERS['randomid'] = self.random_id
+        self.DEFAULT_HEADERS['randomId'] = self.random_id
         if self.verbose:
             debugger.debug("Authorization token set successfully.")
         return self

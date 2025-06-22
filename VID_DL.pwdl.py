@@ -7,7 +7,7 @@ from operator import attrgetter # For easier sorting
 # Assuming mainLogic.downloader.py contains a function named 'main'
 from mainLogic.downloader import main as downloader # Renamed to avoid confusion with internal 'main'
 
-batch_name_default = "yakeen-neet-2-0-2026-854543"
+batch_name_default = "arjuna-neet-2024-683082"
 
 # --- 1. Set up argparse ---
 parser = argparse.ArgumentParser(description="Scrape and download lectures from PenPencil batches.")

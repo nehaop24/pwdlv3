@@ -5,7 +5,7 @@ from mainLogic.utils.glv_var import debugger
 
 class Endpoints:
     DEFAULT_HEADERS = {
-        "randomId": "441c443a-2ab0-40da-86c1-885b88892094",
+        "randomId": "a102b120-fd73-4530-a650-2b489efad9a2",
         "Referer": "https://www.pw.live/",
         "sec-ch-ua": '"Google Chrome";v="129", "Not=A?Brand";v="8", "Chromium";v="129"',
         "sec-ch-ua-mobile": "?0",
@@ -14,7 +14,7 @@ class Endpoints:
         "integration-with": "",
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
         "Accept": "application/json, text/plain, */*",
-        "client-version": "6.0.6"
+        #"client-version": "6.0.6"
     }
 
     @staticmethod
