@@ -59,18 +59,41 @@ class PWDownloadBot:
                 "randomId": random_id
             }
             
-            # CRITICAL: Set up glv_var.vars['prefs'] with the token - this is crucial!
-            # We need to override the file-loaded preferences
-            if 'prefs' not in glv_var.vars:
-                glv_var.vars['prefs'] = {}
+            # CRITICAL: Create a temporary preferences file with our token
+            # This is the only way to ensure mainLogic uses our token
+            temp_prefs_file = "/tmp/temp_preferences.json"
+            temp_prefs = {
+                'cloudfront_id': 'd1d34p8vz63oiq',
+                'patched': False,
+                'user_id': 'temp',
+                'user_update_index': -1,
+                'os-info': 'linux',
+                'batch_name': '',
+                'video_id': '',
+                'tmpDir': '/tmp',
+                'verbose': True,
+                'vsd': '/workspaces/pwdlv3/tgbot/bin/vsd',
+                'ffmpeg': 'ffmpeg',
+                'mp4decrypt': '/workspaces/pwdlv3/tgbot/bin/mp4decrypt',
+                'webui-del-time': 45,
+                'webui': True,
+                'webui-port': '5000',
+                'token': token_config
+            }
             
-            # Set the token in the format mainLogic expects
-            glv_var.vars['prefs']['token'] = token_config
+            # Write temporary preferences file
+            with open(temp_prefs_file, 'w') as f:
+                json.dump(temp_prefs, f, indent=4)
             
-            # Also set the ignore token flag to prevent file loading
-            glv_var.vars['ig_token'] = False  # We want to use our token, not ignore it
+            # Set environment variable to use our temp file
+            original_pref_file = os.environ.get('PWDL_PREF_FILE')
+            os.environ['PWDL_PREF_FILE'] = temp_prefs_file
             
             try:
+                # Force reload of glv_var to use our temp file
+                import importlib
+                importlib.reload(glv_var)
+                
                 # Use CheckState to validate token like your CLI does
                 state = self.check_state.checkup(
                     glv_var.EXECUTABLES,
@@ -89,6 +112,21 @@ class PWDownloadBot:
             except Exception as e:
                 logger.error(f"Token validation failed with exception: {str(e)}")
                 return False
+            finally:
+                # Restore original environment
+                if original_pref_file:
+                    os.environ['PWDL_PREF_FILE'] = original_pref_file
+                elif 'PWDL_PREF_FILE' in os.environ:
+                    del os.environ['PWDL_PREF_FILE']
+                
+                # Clean up temp file
+                try:
+                    os.remove(temp_prefs_file)
+                except:
+                    pass
+                
+                # Reload glv_var to restore original state
+                importlib.reload(glv_var)
                 
         except Exception as e:
             logger.error(f"Error in mainLogic token validation: {str(e)}")
@@ -688,12 +726,9 @@ This bot downloads videos from PhysicsWallah using your token, exactly like the 
         try:
             logger.info(f"Starting mainLogic download for video_id: {video_id}, batch_id: {batch_id}")
             
-            # CRITICAL: Override glv_var.vars['prefs'] to prevent file loading
-            # This ensures our token is used instead of the file token
-            glv_var.vars['prefs'] = {
-                'token': token_config,  # Use the full token config
-                'dir': directory,
-                'tmpDir': './tmp/',
+            # Create a temporary preferences file with our token
+            temp_prefs_file = f"/tmp/temp_preferences_{video_id}.json"
+            temp_prefs = {
                 'cloudfront_id': 'd1d34p8vz63oiq',
                 'patched': False,
                 'user_id': 'temp',
@@ -701,52 +736,81 @@ This bot downloads videos from PhysicsWallah using your token, exactly like the 
                 'os-info': 'linux',
                 'batch_name': batch_id,
                 'video_id': video_id,
+                'tmpDir': '/tmp',
                 'verbose': True,
                 'vsd': '/workspaces/pwdlv3/tgbot/bin/vsd',
                 'ffmpeg': 'ffmpeg',
                 'mp4decrypt': '/workspaces/pwdlv3/tgbot/bin/mp4decrypt',
                 'webui-del-time': 45,
                 'webui': True,
-                'webui-port': '5000'
+                'webui-port': '5000',
+                'token': token_config,
+                'dir': directory
             }
             
-            # Set the ignore token flag to False so our token is used
-            glv_var.vars['ig_token'] = False
+            # Write temporary preferences file
+            with open(temp_prefs_file, 'w') as f:
+                json.dump(temp_prefs, f, indent=4)
             
-            logger.info("Token config set in glv_var.vars['prefs']")
+            # Set environment variable to use our temp file
+            original_pref_file = os.environ.get('PWDL_PREF_FILE')
+            os.environ['PWDL_PREF_FILE'] = temp_prefs_file
             
-            # Setup dependencies using CheckState like your CLI
-            state = self.check_state.checkup(
-                glv_var.EXECUTABLES,
-                directory=directory,
-                verbose=True,  # Enable verbose like your CLI --verbose flag
-                do_raise=True
-            )
-            
-            logger.info("Dependencies checked successfully")
-            
-            # Create Main instance exactly like your CLI does
-            main_instance = Main(
-                id=video_id,
-                name=name,
-                batch_name=batch_id,
-                topic_name=None,  # Not used in your CLI command
-                lecture_url=None,  # Not used in your CLI command
-                directory=directory,
-                tmpDir=state.get('tmpDir', './tmp/'),
-                ffmpeg=state['ffmpeg'],
-                mp4d=state['mp4decrypt'],
-                token=state['prefs']['token'],  # Use the token from state
-                random_id=state['prefs']['random_id'],  # Use the random_id from state
-                verbose=True,  # Enable verbose like your CLI --verbose flag
-                progress_callback=progress_callback
-            )
-            
-            logger.info("Main instance created, starting process...")
-            
-            # Process the download exactly like your CLI
-            main_instance.process()
-            logger.info("MainLogic download completed successfully")
+            try:
+                # Force reload of glv_var to use our temp file
+                import importlib
+                importlib.reload(glv_var)
+                
+                logger.info("Token config set via temporary preferences file")
+                
+                # Setup dependencies using CheckState like your CLI
+                state = self.check_state.checkup(
+                    glv_var.EXECUTABLES,
+                    directory=directory,
+                    verbose=True,  # Enable verbose like your CLI --verbose flag
+                    do_raise=True
+                )
+                
+                logger.info("Dependencies checked successfully")
+                
+                # Create Main instance exactly like your CLI does
+                main_instance = Main(
+                    id=video_id,
+                    name=name,
+                    batch_name=batch_id,
+                    topic_name=None,  # Not used in your CLI command
+                    lecture_url=None,  # Not used in your CLI command
+                    directory=directory,
+                    tmpDir=state.get('tmpDir', './tmp/'),
+                    ffmpeg=state['ffmpeg'],
+                    mp4d=state['mp4decrypt'],
+                    token=state['prefs']['token'],  # Use the token from state
+                    random_id=state['prefs']['random_id'],  # Use the random_id from state
+                    verbose=True,  # Enable verbose like your CLI --verbose flag
+                    progress_callback=progress_callback
+                )
+                
+                logger.info("Main instance created, starting process...")
+                
+                # Process the download exactly like your CLI
+                main_instance.process()
+                logger.info("MainLogic download completed successfully")
+                
+            finally:
+                # Restore original environment
+                if original_pref_file:
+                    os.environ['PWDL_PREF_FILE'] = original_pref_file
+                elif 'PWDL_PREF_FILE' in os.environ:
+                    del os.environ['PWDL_PREF_FILE']
+                
+                # Clean up temp file
+                try:
+                    os.remove(temp_prefs_file)
+                except:
+                    pass
+                
+                # Reload glv_var to restore original state
+                importlib.reload(glv_var)
             
         except Exception as e:
             logger.error(f"Main download failed: {str(e)}")
