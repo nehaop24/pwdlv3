@@ -17,7 +17,7 @@ from mainLogic.startup.Login.sudat import Login
 from mainLogic.main import Main
 from mainLogic.startup.checkup import CheckState
 from mainLogic.utils import glv_var
-from mainLogic.error import PWAPIError, TokenInvalid
+from mainLogic.error import TokenInvalid
 from mainLogic.utils.gen_utils import generate_safe_folder_name
 from mainLogic.utils.glv_var import debugger
 
@@ -47,40 +47,48 @@ class PWDownloadBot:
         self.setup_handlers()
 
     def validate_token_with_mainlogic(self, token: str, random_id: str) -> bool:
-        """Validate token using mainLogic's LicenseKeyFetcher"""
+        """Validate token using mainLogic's CheckState"""
         try:
-            logger.info(f"Validating token with mainLogic LicenseKeyFetcher")
+            logger.info(f"Validating token with mainLogic CheckState")
             
-            # Use your mainLogic's LicenseKeyFetcher to test token
-            fetcher = LicenseKeyFetcher(token, random_id)
+            # Temporarily set the token in glv_var for validation
+            original_prefs = glv_var.vars.get('prefs', {})
             
-            # Test with a simple key fetch operation
-            test_video_id = "680c85b0c9d776d19b869d3f"
-            test_batch_id = "65d75d320531c20018ade9bb"
+            # Create token config similar to your system
+            token_config = {
+                "access_token": token,
+                "token": token,
+                "random_id": random_id,
+                "randomId": random_id
+            }
             
-            logger.info(f"Testing token with video_id: {test_video_id}, batch_id: {test_batch_id}")
+            # Set up temporary preferences for validation
+            temp_prefs = original_prefs.copy()
+            temp_prefs['token'] = token_config
+            glv_var.vars['prefs'] = temp_prefs
             
             try:
-                # This will test the token by trying to get a key
-                key_result = fetcher.get_key(
-                    id=test_video_id,
-                    batch_name=test_batch_id,
-                    verbose=False
+                # Use CheckState to validate token like your CLI does
+                state = self.check_state.checkup(
+                    glv_var.EXECUTABLES,
+                    directory="./",
+                    verbose=False,
+                    do_raise=True
                 )
                 
-                if key_result and len(key_result) >= 2:
-                    logger.info("Token validation successful with mainLogic")
-                    return True
-                else:
-                    logger.warning("Token validation failed - no key returned")
-                    return False
-                    
+                # If we get here, token is valid
+                logger.info("Token validation successful with mainLogic CheckState")
+                return True
+                
             except TokenInvalid:
                 logger.warning("Token validation failed - TokenInvalid exception")
                 return False
             except Exception as e:
                 logger.error(f"Token validation failed with exception: {str(e)}")
                 return False
+            finally:
+                # Restore original preferences
+                glv_var.vars['prefs'] = original_prefs
                 
         except Exception as e:
             logger.error(f"Error in mainLogic token validation: {str(e)}")
@@ -141,7 +149,7 @@ class PWDownloadBot:
             welcome_text = """
 🎓 **PW Video Downloader Bot**
 
-This bot helps you download videos from PhysicsWallah using your token.
+This bot downloads videos from PhysicsWallah using your token, exactly like the CLI tool.
 
 **Commands:**
 /login - Login with phone number (OTP-based)
@@ -152,13 +160,12 @@ This bot helps you download videos from PhysicsWallah using your token.
 /help - Show this help message
 
 **Quick Start:**
-1. Use /login with your phone number for OTP-based login
-2. Or use /token to set your token directly
-3. Then use /download or /link to download videos
+1. Use `/login phone_number` for OTP-based login
+2. Or use `/token your_token_here` to set token directly
+3. Then use `/download` or `/link` to download videos
 
 **Example:**
-`/login 9876543210`
-`/download 6854310c752ef68ab0116a71 "My Video" 678b4cf5a3a368218a2b16e7`
+`/download 6854310c752ef68ab0116a71 "aniknew" 678b4cf5a3a368218a2b16e7`
             """
             
             keyboard = InlineKeyboardMarkup([
@@ -190,8 +197,10 @@ This bot helps you download videos from PhysicsWallah using your token.
 • `/link Video Name:mpd_url`
 
 **Examples:**
-`/download 6854310c752ef68ab0116a71 "Physics Lecture" 678b4cf5a3a368218a2b16e7`
+`/download 6854310c752ef68ab0116a71 "aniknew" 678b4cf5a3a368218a2b16e7`
 `/link Kinetic Theory:https://d1d34p8vz63oiq.cloudfront.net/video_id/master.mpd?parentId=batch&childId=video`
+
+**Note:** This bot uses the same mainLogic components as the CLI tool!
             """
             await message.reply_text(help_text)
 
@@ -419,7 +428,7 @@ This bot helps you download videos from PhysicsWallah using your token.
                     "❌ **Invalid format!**\n\n"
                     "Use: `/download video_id \"video_name\" batch_id`\n\n"
                     "Example:\n"
-                    "`/download 6854310c752ef68ab0116a71 \"Physics Lecture\" 678b4cf5a3a368218a2b16e7`"
+                    "`/download 6854310c752ef68ab0116a71 \"aniknew\" 678b4cf5a3a368218a2b16e7`"
                 )
                 return
             
@@ -458,7 +467,7 @@ This bot helps you download videos from PhysicsWallah using your token.
                     "❌ **Invalid format!**\n\n"
                     "Use: `/link Video Name:mpd_url`\n\n"
                     "Example:\n"
-                    "`/link Kinetic Theory:https://d1d34p8vz63oiq.cloudfront.net/video_id/master.mpd?parentId=batch&childId=video`"
+                    "`/link aniknew:https://d1d34p8vz63oiq.cloudfront.net/c3905743-cd7e-49d7-b472-4a8f11444beb/master.mpd?parentId=63fc53f28aac0a001871320d&childId=6583cf6da25635465b7e6430`"
                 )
                 return
             
@@ -523,7 +532,7 @@ This bot helps you download videos from PhysicsWallah using your token.
                 )
 
     async def start_download(self, message: Message, user_id: int, video_id: str, video_name: str, batch_id: str):
-        """Start video download process using mainLogic"""
+        """Start video download process using mainLogic Main class"""
         
         # Store download info
         self.active_downloads[user_id] = {
@@ -539,7 +548,7 @@ This bot helps you download videos from PhysicsWallah using your token.
             f"📹 **Video:** {video_name}\n"
             f"🆔 **ID:** {video_id}\n"
             f"📦 **Batch:** {batch_id}\n\n"
-            f"⏳ **Status:** Initializing..."
+            f"⏳ **Status:** Initializing mainLogic components..."
         )
         
         try:
@@ -551,16 +560,15 @@ This bot helps you download videos from PhysicsWallah using your token.
                 f"📹 **Video:** {video_name}\n"
                 f"🆔 **ID:** {video_id}\n"
                 f"📦 **Batch:** {batch_id}\n\n"
-                f"⏳ **Status:** Setting up mainLogic components..."
+                f"⏳ **Status:** Setting up dependencies..."
             )
             
-            # Setup dependencies using CheckState
-            state = self.check_state.checkup(
-                glv_var.EXECUTABLES, 
-                directory=config.DOWNLOAD_DIR,
-                verbose=False, 
-                do_raise=True
-            )
+            # Create safe folder name
+            safe_name = generate_safe_folder_name(video_name)
+            
+            # Create download directory for this user
+            user_download_dir = os.path.join(config.DOWNLOAD_DIR, str(user_id))
+            os.makedirs(user_download_dir, exist_ok=True)
             
             # Create progress callback
             async def progress_callback(progress_info):
@@ -572,7 +580,7 @@ This bot helps you download videos from PhysicsWallah using your token.
                     self.active_downloads[user_id]['status'] = status_text
                     
                     # Update message periodically to avoid rate limits
-                    if progress_val % 10 == 0 or progress_val >= 99:
+                    if progress_val % 20 == 0 or progress_val >= 99:
                         await status_msg.edit_text(
                             f"🚀 **Download in progress...**\n\n"
                             f"📹 **Video:** {video_name}\n"
@@ -583,13 +591,6 @@ This bot helps you download videos from PhysicsWallah using your token.
                 except Exception:
                     pass  # Ignore update errors
             
-            # Create safe folder name
-            safe_name = generate_safe_folder_name(video_name)
-            
-            # Create download directory for this user
-            user_download_dir = os.path.join(config.DOWNLOAD_DIR, str(user_id))
-            os.makedirs(user_download_dir, exist_ok=True)
-            
             # Start download using mainLogic Main class
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(
@@ -599,7 +600,6 @@ This bot helps you download videos from PhysicsWallah using your token.
                 safe_name,
                 batch_id,
                 user_download_dir,
-                state,
                 user_session["token"],
                 user_session["random_id"],
                 progress_callback
@@ -667,29 +667,56 @@ This bot helps you download videos from PhysicsWallah using your token.
             if user_id in self.active_downloads:
                 del self.active_downloads[user_id]
 
-    def _run_main_download(self, video_id, name, batch_id, directory, state, token, random_id, progress_callback):
-        """Run the main download using mainLogic Main class"""
+    def _run_main_download(self, video_id, name, batch_id, directory, token, random_id, progress_callback):
+        """Run the main download using mainLogic Main class - exactly like CLI"""
         try:
             logger.info(f"Starting mainLogic download for video_id: {video_id}, batch_id: {batch_id}")
             
-            # Create Main instance with all required parameters
+            # Set up the token in glv_var exactly like your CLI does
+            token_config = {
+                "access_token": token,
+                "token": token,
+                "random_id": random_id,
+                "randomId": random_id
+            }
+            
+            # Set up preferences like your CLI
+            glv_var.vars['prefs'] = {
+                'token': token_config,
+                'dir': directory,
+                'tmpDir': './tmp/'
+            }
+            
+            # Setup dependencies using CheckState like your CLI
+            state = self.check_state.checkup(
+                glv_var.EXECUTABLES,
+                directory=directory,
+                verbose=True,  # Enable verbose like your CLI --verbose flag
+                do_raise=True
+            )
+            
+            logger.info("Dependencies checked successfully")
+            
+            # Create Main instance exactly like your CLI does
             main_instance = Main(
                 id=video_id,
                 name=name,
                 batch_name=batch_id,
-                topic_name=None,
-                lecture_url=None,
+                topic_name=None,  # Not used in your CLI command
+                lecture_url=None,  # Not used in your CLI command
                 directory=directory,
                 tmpDir=state.get('tmpDir', './tmp/'),
                 ffmpeg=state['ffmpeg'],
                 mp4d=state['mp4decrypt'],
-                token=token,
-                random_id=random_id,
-                verbose=True,  # Enable verbose for better logging
+                token=state['prefs']['token'],  # Use the token from state
+                random_id=state['prefs']['random_id'],  # Use the random_id from state
+                verbose=True,  # Enable verbose like your CLI --verbose flag
                 progress_callback=progress_callback
             )
             
-            # Process the download
+            logger.info("Main instance created, starting process...")
+            
+            # Process the download exactly like your CLI
             main_instance.process()
             logger.info("MainLogic download completed successfully")
             
@@ -744,6 +771,7 @@ This bot helps you download videos from PhysicsWallah using your token.
         print(f"📁 Download directory: {config.DOWNLOAD_DIR}")
         print("📱 Phone-based login system enabled")
         print("🔧 Using mainLogic components for downloading")
+        print("⚡ Same processing pipeline as CLI tool")
         
         # Create download directory
         Path(config.DOWNLOAD_DIR).mkdir(parents=True, exist_ok=True)
