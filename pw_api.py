@@ -10,17 +10,113 @@ from typing import Dict, Optional, Tuple, List
 from urllib.parse import urlparse, parse_qs, unquote
 from config import config
 
-# Set up logging
-logging.basicConfig(level=logging.DEBUG)
+# Set up logging for API calls only
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class PWAPIError(Exception):
     pass
 
+class PWLogin:
+    """Phone-based login system similar to your project's Login class"""
+    
+    def __init__(self, phone_number: str):
+        self.phone_number = phone_number
+        self.token = None
+        self.random_id = str(uuid.uuid4())
+        self.headers = {
+            'accept': 'application/json, text/plain, */*',
+            'client-id': '5eb393ee95fab7468a79d189',
+            'client-type': 'WEB',
+            'client-version': '6.0.6',
+            'content-type': 'application/json',
+            'priority': 'u=1, i',
+            'randomid': self.random_id,
+        }
+        logger.info(f"Initialized PWLogin for phone: {phone_number}")
+
+    def send_otp(self, otp_type: str = "phone") -> bool:
+        """Send OTP to phone number"""
+        try:
+            if otp_type == "whatsapp":
+                url = "https://api.penpencil.co/v1/users/get-otp?smsType=1"
+            else:
+                url = "https://api.penpencil.co/v1/users/get-otp?smsType=0"
+            
+            payload = {
+                "username": self.phone_number,
+                "countryCode": "+91",
+                "organizationId": "5eb393ee95fab7468a79d189"
+            }
+            
+            logger.info(f"Sending OTP to {self.phone_number} via {otp_type}")
+            logger.debug(f"OTP URL: {url}")
+            logger.debug(f"OTP Payload: {json.dumps(payload, indent=2)}")
+            
+            response = requests.post(url, headers=self.headers, json=payload)
+            
+            logger.info(f"OTP Response Status: {response.status_code}")
+            logger.debug(f"OTP Response: {response.text}")
+            
+            return response.status_code in [200, 201]
+            
+        except Exception as e:
+            logger.error(f"Error sending OTP: {str(e)}")
+            return False
+
+    def verify_otp(self, otp: str) -> bool:
+        """Verify OTP and get token"""
+        try:
+            url = "https://api.penpencil.co/v3/oauth/token"
+            
+            payload = {
+                "username": self.phone_number,
+                "otp": otp,
+                "client_id": "system-admin",
+                "client_secret": "KjPXuAVfC5xbmgreETNMaL7z",
+                "grant_type": "password",
+                "organizationId": "5eb393ee95fab7468a79d189",
+                "latitude": 0,
+                "longitude": 0
+            }
+            
+            logger.info(f"Verifying OTP for {self.phone_number}")
+            logger.debug(f"Verify URL: {url}")
+            logger.debug(f"Verify Payload: {json.dumps(payload, indent=2)}")
+            
+            response = requests.post(url, headers=self.headers, json=payload)
+            
+            logger.info(f"Verify Response Status: {response.status_code}")
+            logger.debug(f"Verify Response: {response.text}")
+            
+            if response.status_code in [200, 201]:
+                data = response.json()
+                if 'data' in data:
+                    self.token = data['data']
+                    logger.info("OTP verification successful")
+                    logger.debug(f"Token data: {json.dumps(self.token, indent=2)}")
+                    return True
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error verifying OTP: {str(e)}")
+            return False
+
+    def get_access_token(self) -> Optional[str]:
+        """Get the access token from token data"""
+        if not self.token:
+            return None
+        
+        # Try different token field names
+        access_token = self.token.get('token') or self.token.get('access_token')
+        logger.debug(f"Extracted access token: {access_token[:50] if access_token else None}...")
+        return access_token
+
 class LicenseKeyFetcher:
     def __init__(self, token: str, random_id: Optional[str] = None):
         self.token = token
-        # Auto-generate random_id if not provided, similar to your Endpoints class
+        # Auto-generate random_id if not provided
         self.random_id = random_id or str(uuid.uuid4())
         self.url = None
         self.cookies = None

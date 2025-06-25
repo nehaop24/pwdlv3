@@ -10,11 +10,11 @@ from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 
 from config import config
 from downloader import PWDownloader, PWAPIError
-from pw_api import MPDParser, LicenseKeyFetcher
+from pw_api import MPDParser, LicenseKeyFetcher, PWLogin
 
-# Set up logging
+# Set up logging for bot messages only (not API calls)
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.WARNING,  # Only show warnings and errors for Telegram
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
@@ -37,6 +37,7 @@ class PWDownloadBot:
         # Store user sessions and download progress
         self.user_sessions: Dict[int, Dict] = {}
         self.active_downloads: Dict[int, Dict] = {}
+        self.pending_logins: Dict[int, Dict] = {}  # For OTP verification
         
         self.setup_handlers()
 
@@ -45,14 +46,13 @@ class PWDownloadBot:
         
         @self.app.on_message(filters.command("start"))
         async def start_command(client, message: Message):
-            logger.info(f"Start command from user {message.from_user.id}")
             welcome_text = """
 🎓 **PW Video Downloader Bot**
 
-This bot helps you download videos from PhysicsWallah using your token.
+This bot helps you download videos from PhysicsWallah using phone number login.
 
 **Commands:**
-/login - Set your PW token (random ID is auto-generated)
+/login - Login with your phone number
 /download - Download a video using video ID and batch ID
 /link - Download from direct MPD link
 /quality - Check available qualities for a video
@@ -60,10 +60,11 @@ This bot helps you download videos from PhysicsWallah using your token.
 /help - Show this help message
 
 **Usage:**
-1. First, use /login to set your token
+1. First, use /login to authenticate with your phone number
 2. Then use /download or /link to download videos
 
 **Examples:**
+`/login 9876543210`
 `/download 6854310c752ef68ab0116a71 "My Video" 678b4cf5a3a368218a2b16e7`
 `/link Kinetic Theory:https://d1d34p8vz63oiq.cloudfront.net/c3905743.../master.mpd?parentId=...&childId=...`
             """
@@ -77,29 +78,22 @@ This bot helps you download videos from PhysicsWallah using your token.
 
         @self.app.on_message(filters.command("help"))
         async def help_command(client, message: Message):
-            logger.info(f"Help command from user {message.from_user.id}")
             help_text = """
 📖 **How to use this bot:**
 
-**1. Get your PW token:**
-   - Login to pw.live in your browser
-   - Open Developer Tools (F12)
-   - Go to Network tab
-   - Make any request to api.penpencil.co
-   - Copy the `Authorization` header (your token)
-   - **Note:** Random ID is automatically generated!
+**1. Login with your phone number:**
+   `/login 9876543210`
+   
+   The bot will send you an OTP via SMS. Reply with the OTP to complete login.
 
-**2. Login to the bot:**
-   `/login your_token`
-
-**3. Download videos:**
+**2. Download videos:**
    **Method 1 - Using video ID and batch ID:**
    `/download video_id "video_name" batch_id [quality]`
    
    **Method 2 - Using direct MPD link:**
    `/link Video Name:https://d1d34p8vz63oiq.cloudfront.net/.../master.mpd?parentId=...&childId=...`
 
-**4. Check available qualities:**
+**3. Check available qualities:**
    `/quality video_id batch_id` or `/quality direct_link`
 
 **Quality Options:**
@@ -107,7 +101,8 @@ This bot helps you download videos from PhysicsWallah using your token.
 - If not specified, highest available quality is used
 
 **Examples:**
-`/login eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...`
+`/login 9876543210`
+`123456` (OTP reply)
 `/download 6854310c752ef68ab0116a71 "Physics Lecture" 678b4cf5a3a368218a2b16e7 720`
 `/link Kinetic Theory:https://d1d34p8vz63oiq.cloudfront.net/c3905743.../master.mpd?parentId=...&childId=...`
 
@@ -121,103 +116,149 @@ This bot helps you download videos from PhysicsWallah using your token.
         @self.app.on_message(filters.command("login"))
         async def login_command(client, message: Message):
             user_id = message.from_user.id
-            logger.info(f"Login command from user {user_id}")
             
-            # Parse login command - now only requires token
+            # Parse login command - phone number
             parts = message.text.split(maxsplit=1)
             if len(parts) < 2:
                 await message.reply_text(
                     "❌ **Invalid format!**\n\n"
-                    "Use: `/login your_token`\n\n"
+                    "Use: `/login phone_number`\n\n"
                     "Example:\n"
-                    "`/login eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...`\n\n"
-                    "**Note:** Random ID is automatically generated!"
+                    "`/login 9876543210`\n\n"
+                    "**Note:** Use your 10-digit phone number without +91"
                 )
                 return
             
-            token = parts[1]
-            logger.info(f"Received token from user {user_id}: {token[:50]}...")
+            phone_number = parts[1].strip()
             
-            # Validate token format (basic check)
-            if not token.startswith("eyJ"):
-                logger.warning(f"Invalid token format from user {user_id}")
+            # Validate phone number format
+            if not phone_number.isdigit() or len(phone_number) != 10:
                 await message.reply_text(
-                    "❌ **Invalid token format!**\n\n"
-                    "Token should start with 'eyJ'. Please check your token."
+                    "❌ **Invalid phone number format!**\n\n"
+                    "Please enter a valid 10-digit phone number.\n\n"
+                    "Example: `9876543210`"
                 )
                 return
             
-            # Test token validity
             try:
-                logger.info(f"Testing token validity for user {user_id}")
-                fetcher = LicenseKeyFetcher(token)
+                # Initialize login process
+                pw_login = PWLogin(phone_number)
                 
-                # Send a status message while testing
-                status_msg = await message.reply_text("🔄 **Testing token validity...**")
+                # Send OTP
+                status_msg = await message.reply_text("📱 **Sending OTP...**")
                 
-                if not fetcher.test_token_validity():
-                    logger.warning(f"Token validation failed for user {user_id}")
-                    await status_msg.edit_text(
-                        "❌ **Invalid or expired token!**\n\n"
-                        "Please get a fresh token from pw.live\n\n"
-                        "**Debug Info:**\n"
-                        f"• Token starts with: {token[:20]}...\n"
-                        f"• Random ID: {fetcher.random_id}\n"
-                        f"• Check the logs for detailed error information"
-                    )
-                    return
+                if pw_login.send_otp():
+                    # Store login session for OTP verification
+                    self.pending_logins[user_id] = {
+                        "pw_login": pw_login,
+                        "phone_number": phone_number,
+                        "username": message.from_user.username or message.from_user.first_name
+                    }
                     
-                logger.info(f"Token validation successful for user {user_id}")
-                
+                    await status_msg.edit_text(
+                        f"✅ **OTP sent to {phone_number}**\n\n"
+                        "📝 **Please reply with the 6-digit OTP you received**\n\n"
+                        "Example: `123456`"
+                    )
+                else:
+                    await status_msg.edit_text(
+                        "❌ **Failed to send OTP**\n\n"
+                        "Please check your phone number and try again.\n"
+                        "Make sure you have a valid PhysicsWallah account."
+                    )
+                    
             except Exception as e:
-                logger.error(f"Error validating token for user {user_id}: {str(e)}")
                 await message.reply_text(
-                    "❌ **Error validating token!**\n\n"
+                    f"❌ **Error sending OTP**\n\n"
                     f"Error: {str(e)}\n\n"
-                    "**Debug Info:**\n"
-                    f"• Token starts with: {token[:20]}...\n"
-                    f"• Check the logs for detailed error information"
+                    "Please try again later."
+                )
+
+        @self.app.on_message(filters.text & ~filters.command(["start", "help", "login", "download", "link", "quality", "status"]))
+        async def handle_otp(client, message: Message):
+            """Handle OTP verification"""
+            user_id = message.from_user.id
+            
+            # Check if user has pending login
+            if user_id not in self.pending_logins:
+                return  # Not an OTP, ignore
+            
+            otp = message.text.strip()
+            
+            # Validate OTP format
+            if not otp.isdigit() or len(otp) != 6:
+                await message.reply_text(
+                    "❌ **Invalid OTP format**\n\n"
+                    "Please enter the 6-digit OTP you received.\n\n"
+                    "Example: `123456`"
                 )
                 return
             
-            # Store user session with auto-generated random_id
-            fetcher = LicenseKeyFetcher(token)
-            self.user_sessions[user_id] = {
-                "token": token,
-                "random_id": fetcher.random_id,  # Auto-generated
-                "username": message.from_user.username or message.from_user.first_name
-            }
-            
-            logger.info(f"User {user_id} logged in successfully with random_id: {fetcher.random_id}")
-            
-            await status_msg.edit_text(
-                "✅ **Login successful!**\n\n"
-                f"🔑 **Token:** Valid\n"
-                f"🎲 **Random ID:** `{fetcher.random_id}`\n\n"
-                "You can now download videos using `/download` or `/link` commands."
-            )
+            try:
+                pending_login = self.pending_logins[user_id]
+                pw_login = pending_login["pw_login"]
+                
+                status_msg = await message.reply_text("🔄 **Verifying OTP...**")
+                
+                if pw_login.verify_otp(otp):
+                    # Get access token
+                    access_token = pw_login.get_access_token()
+                    
+                    if access_token:
+                        # Store user session
+                        self.user_sessions[user_id] = {
+                            "token": access_token,
+                            "random_id": pw_login.random_id,
+                            "phone_number": pending_login["phone_number"],
+                            "username": pending_login["username"]
+                        }
+                        
+                        # Remove pending login
+                        del self.pending_logins[user_id]
+                        
+                        await status_msg.edit_text(
+                            "✅ **Login successful!**\n\n"
+                            f"📱 **Phone:** {pending_login['phone_number']}\n"
+                            f"🎲 **Random ID:** `{pw_login.random_id}`\n\n"
+                            "You can now download videos using `/download` or `/link` commands."
+                        )
+                    else:
+                        await status_msg.edit_text(
+                            "❌ **Login failed - Could not get access token**\n\n"
+                            "Please try logging in again with `/login`"
+                        )
+                else:
+                    await status_msg.edit_text(
+                        "❌ **Invalid OTP**\n\n"
+                        "Please check the OTP and try again.\n"
+                        "Or use `/login` to request a new OTP."
+                    )
+                    
+            except Exception as e:
+                await message.reply_text(
+                    f"❌ **Error verifying OTP**\n\n"
+                    f"Error: {str(e)}\n\n"
+                    "Please try logging in again with `/login`"
+                )
 
         @self.app.on_message(filters.command("download"))
         async def download_command(client, message: Message):
             user_id = message.from_user.id
-            logger.info(f"Download command from user {user_id}")
             
             # Check if user is logged in
             if user_id not in self.user_sessions:
-                logger.warning(f"User {user_id} not logged in")
                 keyboard = InlineKeyboardMarkup([
                     [InlineKeyboardButton("🔑 Login Now", callback_data="login")]
                 ])
                 await message.reply_text(
                     "❌ **You need to login first!**\n\n"
-                    "Use `/login your_token`",
+                    "Use `/login phone_number`",
                     reply_markup=keyboard
                 )
                 return
             
             # Check if user has active download
             if user_id in self.active_downloads:
-                logger.warning(f"User {user_id} already has active download")
                 await message.reply_text(
                     "⏳ **You already have an active download!**\n\n"
                     "Please wait for it to complete or use /status to check progress."
@@ -247,8 +288,6 @@ This bot helps you download videos from PhysicsWallah using your token.
             if current_part:
                 parts.append(current_part)
             
-            logger.info(f"Parsed download parts: {parts}")
-            
             if len(parts) < 3:
                 await message.reply_text(
                     "❌ **Invalid format!**\n\n"
@@ -270,32 +309,27 @@ This bot helps you download videos from PhysicsWallah using your token.
                     await message.reply_text("❌ **Invalid quality format!** Quality should be a number (e.g., 720)")
                     return
             
-            logger.info(f"Download request - video_id: {video_id}, name: {video_name}, batch_id: {batch_id}, quality: {quality}")
-            
             # Start download
             await self.start_batch_download(message, user_id, video_id, video_name, batch_id, quality)
 
         @self.app.on_message(filters.command("link"))
         async def link_command(client, message: Message):
             user_id = message.from_user.id
-            logger.info(f"Link command from user {user_id}")
             
             # Check if user is logged in
             if user_id not in self.user_sessions:
-                logger.warning(f"User {user_id} not logged in")
                 keyboard = InlineKeyboardMarkup([
                     [InlineKeyboardButton("🔑 Login Now", callback_data="login")]
                 ])
                 await message.reply_text(
                     "❌ **You need to login first!**\n\n"
-                    "Use `/login your_token`",
+                    "Use `/login phone_number`",
                     reply_markup=keyboard
                 )
                 return
             
             # Check if user has active download
             if user_id in self.active_downloads:
-                logger.warning(f"User {user_id} already has active download")
                 await message.reply_text(
                     "⏳ **You already have an active download!**\n\n"
                     "Please wait for it to complete or use /status to check progress."
@@ -324,15 +358,12 @@ This bot helps you download videos from PhysicsWallah using your token.
                     await message.reply_text("❌ **Invalid quality format!** Quality should be a number (e.g., 720)")
                     return
             
-            logger.info(f"Link download request - link: {link}, quality: {quality}")
-            
             # Start download
             await self.start_link_download(message, user_id, link, quality)
 
         @self.app.on_message(filters.command("quality"))
         async def quality_command(client, message: Message):
             user_id = message.from_user.id
-            logger.info(f"Quality command from user {user_id}")
             
             # Check if user is logged in
             if user_id not in self.user_sessions:
@@ -357,12 +388,10 @@ This bot helps you download videos from PhysicsWallah using your token.
                 if len(parts) == 2:
                     # video_id and batch_id provided
                     video_id, batch_id = parts[0], parts[1]
-                    logger.info(f"Getting quality for video_id: {video_id}, batch_id: {batch_id}")
                     mpd_url, _, _ = fetcher.get_video_url_and_key(video_id, batch_id)
                 elif len(parts) == 1:
                     # Direct link provided
                     link = parts[0]
-                    logger.info(f"Getting quality for direct link: {link}")
                     if ':' in link:
                         mpd_url = link.split(':', 1)[1].strip()
                     else:
@@ -389,23 +418,31 @@ This bot helps you download videos from PhysicsWallah using your token.
                 await message.reply_text(quality_text)
                 
             except Exception as e:
-                logger.error(f"Error getting quality info for user {user_id}: {str(e)}")
                 await message.reply_text(f"❌ **Error getting quality info:** {str(e)}")
 
         @self.app.on_message(filters.command("status"))
         async def status_command(client, message: Message):
             user_id = message.from_user.id
-            logger.info(f"Status command from user {user_id}")
             
             if user_id not in self.user_sessions:
-                await message.reply_text("❌ **You are not logged in!**")
+                if user_id in self.pending_logins:
+                    pending = self.pending_logins[user_id]
+                    await message.reply_text(
+                        f"⏳ **Login in progress**\n\n"
+                        f"📱 **Phone:** {pending['phone_number']}\n"
+                        f"📝 **Waiting for OTP verification**\n\n"
+                        "Please reply with the 6-digit OTP you received."
+                    )
+                else:
+                    await message.reply_text("❌ **You are not logged in!**")
                 return
             
             if user_id not in self.active_downloads:
                 user_session = self.user_sessions[user_id]
                 await message.reply_text(
                     f"✅ **No active downloads**\n\n"
-                    f"🔑 **Logged in as:** {user_session['username']}\n"
+                    f"📱 **Phone:** {user_session['phone_number']}\n"
+                    f"👤 **User:** {user_session['username']}\n"
                     f"🎲 **Random ID:** `{user_session['random_id']}`"
                 )
                 return
@@ -423,23 +460,9 @@ This bot helps you download videos from PhysicsWallah using your token.
             
             await message.reply_text(status_text)
 
-        @self.app.on_message(filters.command("logs"))
-        async def logs_command(client, message: Message):
-            """Debug command to show recent logs"""
-            user_id = message.from_user.id
-            logger.info(f"Logs command from user {user_id}")
-            
-            # Only allow this for debugging - you might want to restrict this
-            await message.reply_text(
-                "📋 **Debug Logs**\n\n"
-                "Check the console/server logs for detailed debugging information.\n"
-                "All API calls and responses are being logged."
-            )
-
         @self.app.on_callback_query()
         async def callback_handler(client, callback_query):
             data = callback_query.data
-            logger.info(f"Callback query: {data}")
             
             if data == "help":
                 await callback_query.message.edit_text(
@@ -449,15 +472,13 @@ This bot helps you download videos from PhysicsWallah using your token.
             elif data == "login":
                 await callback_query.message.edit_text(
                     "🔑 **Login Instructions**\n\n"
-                    "Use: `/login your_token`\n\n"
-                    "Get your token from pw.live browser developer tools.\n"
-                    "Random ID is automatically generated!"
+                    "Use: `/login phone_number`\n\n"
+                    "Example: `/login 9876543210`\n\n"
+                    "You'll receive an OTP via SMS to complete the login."
                 )
 
     async def start_batch_download(self, message: Message, user_id: int, video_id: str, video_name: str, batch_id: str, quality: Optional[int]):
         """Start batch video download process"""
-        
-        logger.info(f"Starting batch download for user {user_id}")
         
         # Store download info
         self.active_downloads[user_id] = {
@@ -481,7 +502,6 @@ This bot helps you download videos from PhysicsWallah using your token.
         
         try:
             user_session = self.user_sessions[user_id]
-            logger.info(f"Using session for user {user_id}: random_id={user_session['random_id']}")
             
             # Update status
             await status_msg.edit_text(
@@ -535,7 +555,6 @@ This bot helps you download videos from PhysicsWallah using your token.
             
             # Download completed successfully
             file_size = os.path.getsize(output_file) / (1024 * 1024)  # MB
-            logger.info(f"Download completed for user {user_id}: {output_file} ({file_size:.1f} MB)")
             
             await status_msg.edit_text(
                 f"✅ **Download completed!**\n\n"
@@ -554,7 +573,6 @@ This bot helps you download videos from PhysicsWallah using your token.
                         caption=f"🎬 **{video_name}**\n\n📊 Size: {file_size:.1f} MB"
                     )
                 except Exception as e:
-                    logger.error(f"Error sending video file: {str(e)}")
                     await message.reply_text(
                         f"✅ **Download completed but file is too large to send via Telegram.**\n\n"
                         f"📁 **File location:** `{output_file}`\n"
@@ -568,22 +586,18 @@ This bot helps you download videos from PhysicsWallah using your token.
                 )
             
         except PWAPIError as e:
-            logger.error(f"PWAPIError for user {user_id}: {str(e)}")
             await status_msg.edit_text(
                 f"❌ **Download failed!**\n\n"
                 f"📹 **Video:** {video_name}\n"
                 f"🆔 **ID:** {video_id}\n\n"
-                f"💥 **Error:** {str(e)}\n\n"
-                f"🔍 **Debug:** Check logs for detailed error information"
+                f"💥 **Error:** {str(e)}"
             )
         except Exception as e:
-            logger.error(f"Unexpected error for user {user_id}: {str(e)}")
             await status_msg.edit_text(
                 f"❌ **Unexpected error!**\n\n"
                 f"📹 **Video:** {video_name}\n"
                 f"🆔 **ID:** {video_id}\n\n"
-                f"💥 **Error:** {str(e)}\n\n"
-                f"🔍 **Debug:** Check logs for detailed error information"
+                f"💥 **Error:** {str(e)}"
             )
         finally:
             # Remove from active downloads
@@ -592,8 +606,6 @@ This bot helps you download videos from PhysicsWallah using your token.
 
     async def start_link_download(self, message: Message, user_id: int, link: str, quality: Optional[int]):
         """Start direct link download process"""
-        
-        logger.info(f"Starting link download for user {user_id}")
         
         try:
             # Parse the link to get name
@@ -620,7 +632,6 @@ This bot helps you download videos from PhysicsWallah using your token.
             )
             
             user_session = self.user_sessions[user_id]
-            logger.info(f"Using session for user {user_id}: random_id={user_session['random_id']}")
             
             # Create progress callback
             async def progress_callback(progress_info):
@@ -660,7 +671,6 @@ This bot helps you download videos from PhysicsWallah using your token.
             
             # Download completed successfully
             file_size = os.path.getsize(output_file) / (1024 * 1024)  # MB
-            logger.info(f"Link download completed for user {user_id}: {output_file} ({file_size:.1f} MB)")
             
             await status_msg.edit_text(
                 f"✅ **Download completed!**\n\n"
@@ -679,7 +689,6 @@ This bot helps you download videos from PhysicsWallah using your token.
                         caption=f"🎬 **{name}**\n\n📊 Size: {file_size:.1f} MB"
                     )
                 except Exception as e:
-                    logger.error(f"Error sending video file: {str(e)}")
                     await message.reply_text(
                         f"✅ **Download completed but file is too large to send via Telegram.**\n\n"
                         f"📁 **File location:** `{output_file}`\n"
@@ -693,20 +702,16 @@ This bot helps you download videos from PhysicsWallah using your token.
                 )
             
         except PWAPIError as e:
-            logger.error(f"PWAPIError for user {user_id}: {str(e)}")
             await status_msg.edit_text(
                 f"❌ **Download failed!**\n\n"
                 f"📹 **Video:** {name}\n\n"
-                f"💥 **Error:** {str(e)}\n\n"
-                f"🔍 **Debug:** Check logs for detailed error information"
+                f"💥 **Error:** {str(e)}"
             )
         except Exception as e:
-            logger.error(f"Unexpected error for user {user_id}: {str(e)}")
             await status_msg.edit_text(
                 f"❌ **Unexpected error!**\n\n"
                 f"📹 **Video:** {name}\n\n"
-                f"💥 **Error:** {str(e)}\n\n"
-                f"🔍 **Debug:** Check logs for detailed error information"
+                f"💥 **Error:** {str(e)}"
             )
         finally:
             # Remove from active downloads
@@ -717,7 +722,7 @@ This bot helps you download videos from PhysicsWallah using your token.
         """Start the bot"""
         print("🤖 Starting PW Downloader Bot...")
         print(f"📁 Download directory: {config.DOWNLOAD_DIR}")
-        logger.info("Bot starting up...")
+        print("📱 Phone-based login system enabled")
         
         # Create download directory
         Path(config.DOWNLOAD_DIR).mkdir(parents=True, exist_ok=True)
