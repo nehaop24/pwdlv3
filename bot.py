@@ -59,12 +59,16 @@ class PWDownloadBot:
                 "randomId": random_id
             }
             
-            # Set up glv_var.vars['prefs'] with the token - this is crucial!
+            # CRITICAL: Set up glv_var.vars['prefs'] with the token - this is crucial!
+            # We need to override the file-loaded preferences
             if 'prefs' not in glv_var.vars:
                 glv_var.vars['prefs'] = {}
             
             # Set the token in the format mainLogic expects
             glv_var.vars['prefs']['token'] = token_config
+            
+            # Also set the ignore token flag to prevent file loading
+            glv_var.vars['ig_token'] = False  # We want to use our token, not ignore it
             
             try:
                 # Use CheckState to validate token like your CLI does
@@ -684,12 +688,32 @@ This bot downloads videos from PhysicsWallah using your token, exactly like the 
         try:
             logger.info(f"Starting mainLogic download for video_id: {video_id}, batch_id: {batch_id}")
             
-            # Set up glv_var.vars['prefs'] exactly like your CLI does
+            # CRITICAL: Override glv_var.vars['prefs'] to prevent file loading
+            # This ensures our token is used instead of the file token
             glv_var.vars['prefs'] = {
                 'token': token_config,  # Use the full token config
                 'dir': directory,
-                'tmpDir': './tmp/'
+                'tmpDir': './tmp/',
+                'cloudfront_id': 'd1d34p8vz63oiq',
+                'patched': False,
+                'user_id': 'temp',
+                'user_update_index': -1,
+                'os-info': 'linux',
+                'batch_name': batch_id,
+                'video_id': video_id,
+                'verbose': True,
+                'vsd': '/workspaces/pwdlv3/tgbot/bin/vsd',
+                'ffmpeg': 'ffmpeg',
+                'mp4decrypt': '/workspaces/pwdlv3/tgbot/bin/mp4decrypt',
+                'webui-del-time': 45,
+                'webui': True,
+                'webui-port': '5000'
             }
+            
+            # Set the ignore token flag to False so our token is used
+            glv_var.vars['ig_token'] = False
+            
+            logger.info("Token config set in glv_var.vars['prefs']")
             
             # Setup dependencies using CheckState like your CLI
             state = self.check_state.checkup(
