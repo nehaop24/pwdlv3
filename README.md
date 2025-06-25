@@ -1,6 +1,6 @@
 # PW Video Downloader Telegram Bot
 
-A Telegram bot that downloads videos from PhysicsWallah (pw.live) using user tokens. Supports both batch downloads and direct MPD links with quality selection.
+A Telegram bot that downloads videos from PhysicsWallah (pw.live) using user tokens. Supports both batch downloads and direct MPD links with quality selection and automatic random ID generation.
 
 ## Features
 
@@ -8,6 +8,7 @@ A Telegram bot that downloads videos from PhysicsWallah (pw.live) using user tok
 - 🔗 Support for direct MPD links
 - 🎬 Quality selection (240p, 360p, 480p, 720p, 1080p)
 - 🔐 Secure token-based authentication
+- 🎲 **Automatic random ID generation** (no need to manually extract)
 - 📊 Real-time download progress
 - 🎬 Automatic video delivery (for files under 50MB)
 - 🛡️ User session management
@@ -63,19 +64,19 @@ python bot.py
 
 ## Usage
 
-### 1. Get PW Credentials
+### 1. Get PW Token (Simplified!)
 
 1. Login to pw.live in your browser
 2. Open Developer Tools (F12)
 3. Go to Network tab
 4. Make any request to api.penpencil.co
 5. Copy the `Authorization` header (your token)
-6. Copy the `randomid` header
+6. **That's it!** Random ID is automatically generated
 
 ### 2. Bot Commands
 
 - `/start` - Start the bot
-- `/login token random_id` - Set your PW credentials
+- `/login token` - Set your PW token (random ID auto-generated)
 - `/download video_id "video_name" batch_id [quality]` - Download using IDs
 - `/link Video Name:mpd_url [quality]` - Download from direct link
 - `/quality video_id batch_id` or `/quality direct_link` - Check available qualities
@@ -84,9 +85,9 @@ python bot.py
 
 ### 3. Example Usage
 
-**Login:**
+**Login (Simplified!):**
 ```
-/login eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9... a3e290fa-ea36-4012-9124-8908794c33aa
+/login eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...
 ```
 
 **Download using video ID and batch ID:**
@@ -126,22 +127,42 @@ Where:
 - `parentId` = batch ID
 - `childId` = video ID
 
+## Key Improvements
+
+### 🎲 Automatic Random ID Generation
+- **No more manual extraction** of random ID from browser
+- **Automatic UUID generation** similar to your Endpoints class
+- **Token validation** to ensure credentials work
+- **Simplified login process** - just provide the token!
+
+### 🔧 Enhanced Error Handling
+- **Token validity testing** before storing credentials
+- **Better error messages** for invalid tokens
+- **Automatic retry logic** for network issues
+
+### 📱 Improved User Experience
+- **Cleaner login flow** with fewer steps
+- **Real-time status updates** during downloads
+- **Quality preview** before downloading
+- **Progress tracking** with detailed feedback
+
 ## How It Works
 
-1. **Authentication**: Users provide their PW token and random ID
-2. **Video URL Extraction**: Bot fetches video URLs and decryption keys from PW API
-3. **Quality Selection**: Bot analyzes available qualities and selects based on user preference
-4. **MPD Parsing**: Parses the DASH manifest to get segment URLs
-5. **Segment Download**: Downloads audio and video segments concurrently
-6. **Decryption**: Decrypts segments using mp4decrypt
-7. **Merging**: Combines audio and video using ffmpeg
-8. **Delivery**: Sends the final video file via Telegram
+1. **Authentication**: Users provide their PW token, random ID is auto-generated
+2. **Token Validation**: Bot tests token validity before storing
+3. **Video URL Extraction**: Bot fetches video URLs and decryption keys from PW API
+4. **Quality Selection**: Bot analyzes available qualities and selects based on user preference
+5. **MPD Parsing**: Parses the DASH manifest to get segment URLs
+6. **Segment Download**: Downloads audio and video segments concurrently
+7. **Decryption**: Decrypts segments using mp4decrypt
+8. **Merging**: Combines audio and video using ffmpeg
+9. **Delivery**: Sends the final video file via Telegram
 
 ## File Structure
 
 ```
-├── bot.py              # Main bot application
-├── pw_api.py           # PW API client and MPD parser with quality support
+├── bot.py              # Main bot application with auto random ID
+├── pw_api.py           # Enhanced PW API client with auto UUID generation
 ├── downloader.py       # Download and processing logic
 ├── config.py           # Configuration management
 ├── requirements.txt    # Python dependencies
@@ -152,8 +173,9 @@ Where:
 ## Security Notes
 
 - User tokens are stored in memory only (not persisted)
+- Random IDs are automatically generated using UUID4
 - Each user can only have one active download at a time
-- Bot validates token format before storing
+- Bot validates token format and functionality before storing
 - All downloads are isolated per user
 
 ## Limitations
@@ -167,17 +189,17 @@ Where:
 
 ### Common Issues
 
-1. **"mp4decrypt not found"**
+1. **"Invalid or expired token"**
+   - Get a fresh token from pw.live
+   - Ensure you're copying the full Authorization header
+
+2. **"mp4decrypt not found"**
    - Install mp4decrypt and add to PATH
    - Or place binary in `./bin/` directory
 
-2. **"ffmpeg not found"**
+3. **"ffmpeg not found"**
    - Install ffmpeg and add to PATH
    - Or place binary in `./bin/` directory
-
-3. **"Invalid token format"**
-   - Ensure token starts with "eyJ"
-   - Ensure random_id is 36 characters long
 
 4. **Download fails**
    - Check if token is still valid

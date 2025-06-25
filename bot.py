@@ -43,7 +43,7 @@ class PWDownloadBot:
 This bot helps you download videos from PhysicsWallah using your token.
 
 **Commands:**
-/login - Set your PW token and random ID
+/login - Set your PW token (random ID is auto-generated)
 /download - Download a video using video ID and batch ID
 /link - Download from direct MPD link
 /quality - Check available qualities for a video
@@ -51,7 +51,7 @@ This bot helps you download videos from PhysicsWallah using your token.
 /help - Show this help message
 
 **Usage:**
-1. First, use /login to set your credentials
+1. First, use /login to set your token
 2. Then use /download or /link to download videos
 
 **Examples:**
@@ -71,16 +71,16 @@ This bot helps you download videos from PhysicsWallah using your token.
             help_text = """
 📖 **How to use this bot:**
 
-**1. Get your PW credentials:**
+**1. Get your PW token:**
    - Login to pw.live in your browser
    - Open Developer Tools (F12)
    - Go to Network tab
    - Make any request to api.penpencil.co
    - Copy the `Authorization` header (your token)
-   - Copy the `randomid` header
+   - **Note:** Random ID is automatically generated!
 
 **2. Login to the bot:**
-   `/login your_token your_random_id`
+   `/login your_token`
 
 **3. Download videos:**
    **Method 1 - Using video ID and batch ID:**
@@ -97,6 +97,7 @@ This bot helps you download videos from PhysicsWallah using your token.
 - If not specified, highest available quality is used
 
 **Examples:**
+`/login eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...`
 `/download 6854310c752ef68ab0116a71 "Physics Lecture" 678b4cf5a3a368218a2b16e7 720`
 `/link Kinetic Theory:https://d1d34p8vz63oiq.cloudfront.net/c3905743.../master.mpd?parentId=...&childId=...`
 
@@ -111,37 +112,56 @@ This bot helps you download videos from PhysicsWallah using your token.
         async def login_command(client, message: Message):
             user_id = message.from_user.id
             
-            # Parse login command
-            parts = message.text.split(maxsplit=2)
-            if len(parts) < 3:
+            # Parse login command - now only requires token
+            parts = message.text.split(maxsplit=1)
+            if len(parts) < 2:
                 await message.reply_text(
                     "❌ **Invalid format!**\n\n"
-                    "Use: `/login your_token your_random_id`\n\n"
+                    "Use: `/login your_token`\n\n"
                     "Example:\n"
-                    "`/login eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9... a3e290fa-ea36-4012-9124-8908794c33aa`"
+                    "`/login eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...`\n\n"
+                    "**Note:** Random ID is automatically generated!"
                 )
                 return
             
             token = parts[1]
-            random_id = parts[2]
             
             # Validate token format (basic check)
-            if not token.startswith("eyJ") or len(random_id) != 36:
+            if not token.startswith("eyJ"):
                 await message.reply_text(
-                    "❌ **Invalid credentials format!**\n\n"
-                    "Please check your token and random ID format."
+                    "❌ **Invalid token format!**\n\n"
+                    "Token should start with 'eyJ'. Please check your token."
                 )
                 return
             
-            # Store user session
+            # Test token validity
+            try:
+                fetcher = LicenseKeyFetcher(token)
+                if not fetcher.test_token_validity():
+                    await message.reply_text(
+                        "❌ **Invalid or expired token!**\n\n"
+                        "Please get a fresh token from pw.live"
+                    )
+                    return
+            except Exception as e:
+                await message.reply_text(
+                    "❌ **Error validating token!**\n\n"
+                    f"Error: {str(e)}"
+                )
+                return
+            
+            # Store user session with auto-generated random_id
+            fetcher = LicenseKeyFetcher(token)
             self.user_sessions[user_id] = {
                 "token": token,
-                "random_id": random_id,
+                "random_id": fetcher.random_id,  # Auto-generated
                 "username": message.from_user.username or message.from_user.first_name
             }
             
             await message.reply_text(
                 "✅ **Login successful!**\n\n"
+                f"🔑 **Token:** Valid\n"
+                f"🎲 **Random ID:** `{fetcher.random_id}`\n\n"
                 "You can now download videos using `/download` or `/link` commands."
             )
 
@@ -156,7 +176,7 @@ This bot helps you download videos from PhysicsWallah using your token.
                 ])
                 await message.reply_text(
                     "❌ **You need to login first!**\n\n"
-                    "Use `/login your_token your_random_id`",
+                    "Use `/login your_token`",
                     reply_markup=keyboard
                 )
                 return
@@ -227,7 +247,7 @@ This bot helps you download videos from PhysicsWallah using your token.
                 ])
                 await message.reply_text(
                     "❌ **You need to login first!**\n\n"
-                    "Use `/login your_token your_random_id`",
+                    "Use `/login your_token`",
                     reply_markup=keyboard
                 )
                 return
@@ -333,7 +353,12 @@ This bot helps you download videos from PhysicsWallah using your token.
                 return
             
             if user_id not in self.active_downloads:
-                await message.reply_text("✅ **No active downloads**")
+                user_session = self.user_sessions[user_id]
+                await message.reply_text(
+                    f"✅ **No active downloads**\n\n"
+                    f"🔑 **Logged in as:** {user_session['username']}\n"
+                    f"🎲 **Random ID:** `{user_session['random_id']}`"
+                )
                 return
             
             download_info = self.active_downloads[user_id]
@@ -361,8 +386,9 @@ This bot helps you download videos from PhysicsWallah using your token.
             elif data == "login":
                 await callback_query.message.edit_text(
                     "🔑 **Login Instructions**\n\n"
-                    "Use: `/login your_token your_random_id`\n\n"
-                    "Get your credentials from pw.live browser developer tools."
+                    "Use: `/login your_token`\n\n"
+                    "Get your token from pw.live browser developer tools.\n"
+                    "Random ID is automatically generated!"
                 )
 
     async def start_batch_download(self, message: Message, user_id: int, video_id: str, video_name: str, batch_id: str, quality: Optional[int]):

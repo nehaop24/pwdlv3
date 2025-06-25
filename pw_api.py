@@ -4,6 +4,7 @@ import re
 import base64
 import xmltodict
 import isodate
+import uuid
 from typing import Dict, Optional, Tuple, List
 from urllib.parse import urlparse, parse_qs, unquote
 from config import config
@@ -12,9 +13,10 @@ class PWAPIError(Exception):
     pass
 
 class LicenseKeyFetcher:
-    def __init__(self, token: str, random_id: str):
+    def __init__(self, token: str, random_id: Optional[str] = None):
         self.token = token
-        self.random_id = random_id
+        # Auto-generate random_id if not provided, similar to your Endpoints class
+        self.random_id = random_id or str(uuid.uuid4())
         self.url = None
         self.cookies = None
 
@@ -99,6 +101,17 @@ class LicenseKeyFetcher:
             
         except Exception as e:
             raise PWAPIError(f"Error parsing direct link: {str(e)}")
+
+    def test_token_validity(self) -> bool:
+        """Test if the token is valid by making a simple API call"""
+        try:
+            headers = self.get_otp_headers()
+            # Use a simple endpoint to test token validity
+            test_url = "https://api.penpencil.co/v1/users/me"
+            response = requests.get(test_url, headers=headers)
+            return response.status_code == 200
+        except Exception:
+            return False
 
     def get_video_url_and_key(self, video_id: str, batch_id: str) -> Tuple[str, str, str]:
         """Get video URL and decryption key"""
