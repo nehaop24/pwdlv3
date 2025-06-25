@@ -8,6 +8,9 @@ import traceback
 
 debugger = Debugger(enabled=True,show_location=True)
 
+# Add PWAPIError for bot compatibility
+class PWAPIError(Exception):
+    pass
 
 errorList = {
     "unknownError": {
@@ -294,4 +297,3 @@ class AdaptationSetIsNotVideo(PwdlError):
         super().__init__(errorList["adaptationSetIsNotVideo"]["message_template"],
                          errorList["adaptationSetIsNotVideo"]["code"],
                          errorList["adaptationSetIsNotVideo"]["func"])
-

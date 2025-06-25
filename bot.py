@@ -9,8 +9,16 @@ from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 
 from config import config
-from downloader import PWDownloader, PWAPIError
-from pw_api import MPDParser, LicenseKeyFetcher, PWLogin
+
+# Import from your existing mainLogic
+from mainLogic.startup.Login.sudat import Login
+from mainLogic.big4.Ravenclaw_decrypt.key import LicenseKeyFetcher
+from mainLogic.utils.MPDParser import MPDParser
+from mainLogic.main import Main
+from mainLogic.startup.checkup import CheckState
+from mainLogic.utils import glv_var
+from mainLogic.utils.glv_var import debugger
+from mainLogic.error import PWAPIError
 
 # Set up logging for bot messages only (not API calls)
 logging.basicConfig(
@@ -28,16 +36,13 @@ class PWDownloadBot:
             bot_token=config.BOT_TOKEN
         )
         
-        self.downloader = PWDownloader(
-            tmp_dir=os.path.join(config.DOWNLOAD_DIR, "tmp"),
-            out_dir=config.DOWNLOAD_DIR,
-            max_workers=config.MAX_WORKERS
-        )
-        
         # Store user sessions and download progress
         self.user_sessions: Dict[int, Dict] = {}
         self.active_downloads: Dict[int, Dict] = {}
         self.pending_logins: Dict[int, Dict] = {}  # For OTP verification
+        
+        # Initialize checkup for dependencies
+        self.ch = CheckState()
         
         self.setup_handlers()
 
@@ -141,16 +146,16 @@ This bot helps you download videos from PhysicsWallah using phone number login.
                 return
             
             try:
-                # Initialize login process
-                pw_login = PWLogin(phone_number)
+                # Initialize login process using your existing Login class
+                login_instance = Login(phone_number)
                 
                 # Send OTP
                 status_msg = await message.reply_text("📱 **Sending OTP...**")
                 
-                if pw_login.send_otp():
+                if login_instance.gen_otp():
                     # Store login session for OTP verification
                     self.pending_logins[user_id] = {
-                        "pw_login": pw_login,
+                        "login_instance": login_instance,
                         "phone_number": phone_number,
                         "username": message.from_user.username or message.from_user.first_name
                     }
@@ -168,6 +173,7 @@ This bot helps you download videos from PhysicsWallah using phone number login.
                     )
                     
             except Exception as e:
+                debugger.error(f"Error sending OTP: {str(e)}")
                 await message.reply_text(
                     f"❌ **Error sending OTP**\n\n"
                     f"Error: {str(e)}\n\n"
@@ -196,19 +202,23 @@ This bot helps you download videos from PhysicsWallah using phone number login.
             
             try:
                 pending_login = self.pending_logins[user_id]
-                pw_login = pending_login["pw_login"]
+                login_instance = pending_login["login_instance"]
                 
                 status_msg = await message.reply_text("🔄 **Verifying OTP...**")
                 
-                if pw_login.verify_otp(otp):
-                    # Get access token
-                    access_token = pw_login.get_access_token()
+                if login_instance.login(otp):
+                    # Get token data from login instance
+                    token_data = login_instance.token
                     
-                    if access_token:
+                    if token_data:
+                        # Extract access token and random ID
+                        access_token = token_data.get('token') or token_data.get('access_token')
+                        random_id = token_data.get('randomId', "a3e290fa-ea36-4012-9124-8908794c33aa")
+                        
                         # Store user session
                         self.user_sessions[user_id] = {
                             "token": access_token,
-                            "random_id": pw_login.random_id,
+                            "random_id": random_id,
                             "phone_number": pending_login["phone_number"],
                             "username": pending_login["username"]
                         }
@@ -219,7 +229,7 @@ This bot helps you download videos from PhysicsWallah using phone number login.
                         await status_msg.edit_text(
                             "✅ **Login successful!**\n\n"
                             f"📱 **Phone:** {pending_login['phone_number']}\n"
-                            f"🎲 **Random ID:** `{pw_login.random_id}`\n\n"
+                            f"🎲 **Random ID:** `{random_id}`\n\n"
                             "You can now download videos using `/download` or `/link` commands."
                         )
                     else:
@@ -235,6 +245,7 @@ This bot helps you download videos from PhysicsWallah using phone number login.
                     )
                     
             except Exception as e:
+                debugger.error(f"Error verifying OTP: {str(e)}")
                 await message.reply_text(
                     f"❌ **Error verifying OTP**\n\n"
                     f"Error: {str(e)}\n\n"
@@ -388,7 +399,8 @@ This bot helps you download videos from PhysicsWallah using phone number login.
                 if len(parts) == 2:
                     # video_id and batch_id provided
                     video_id, batch_id = parts[0], parts[1]
-                    mpd_url, _, _ = fetcher.get_video_url_and_key(video_id, batch_id)
+                    kid, key = fetcher.get_key(video_id, batch_id, verbose=False)
+                    mpd_url = fetcher.url
                 elif len(parts) == 1:
                     # Direct link provided
                     link = parts[0]
@@ -400,15 +412,18 @@ This bot helps you download videos from PhysicsWallah using phone number login.
                     await message.reply_text("❌ **Invalid format!**")
                     return
                 
-                # Parse MPD and get qualities
+                # Parse MPD and get qualities using your existing MPDParser
                 parser = MPDParser(mpd_url)
-                qualities = parser.get_available_qualities()
+                parser.pre_process().parse()
                 
-                if qualities:
+                # Get available resolutions from video adaptation set
+                video_set = parser.get_video_set()
+                resolutions = parser.get_resolutions_in_adaptation_set(video_set)
+                
+                if resolutions:
                     quality_text = "📺 **Available Qualities:**\n\n"
-                    for q in qualities:
-                        bandwidth_mb = f" ({q['bandwidth']//1000} kbps)" if q['bandwidth'] else ""
-                        quality_text += f"• **{q['height']}p** ({q['width']}x{q['height']}){bandwidth_mb}\n"
+                    for res in sorted(resolutions, reverse=True):
+                        quality_text += f"• **{res}p**\n"
                     
                     quality_text += "\n💡 **Usage:** Add quality number to your download command\n"
                     quality_text += "Example: `/download video_id \"name\" batch_id 720`"
@@ -418,6 +433,7 @@ This bot helps you download videos from PhysicsWallah using phone number login.
                 await message.reply_text(quality_text)
                 
             except Exception as e:
+                debugger.error(f"Error getting quality info: {str(e)}")
                 await message.reply_text(f"❌ **Error getting quality info:** {str(e)}")
 
         @self.app.on_message(filters.command("status"))
@@ -477,8 +493,39 @@ This bot helps you download videos from PhysicsWallah using phone number login.
                     "You'll receive an OTP via SMS to complete the login."
                 )
 
+    def parse_direct_link(self, link: str):
+        """Parse direct MPD link to extract video_id, batch_id, and name"""
+        try:
+            from urllib.parse import urlparse, parse_qs
+            
+            # Split by the colon to separate name and URL
+            if ':' in link:
+                name, url = link.split(':', 1)
+                name = name.strip()
+            else:
+                url = link.strip()
+                name = "Video"
+            
+            # Parse URL to extract parentId and childId
+            parsed_url = urlparse(url)
+            query_params = parse_qs(parsed_url.query)
+            
+            parent_id = query_params.get('parentId', [None])[0]
+            child_id = query_params.get('childId', [None])[0]
+            
+            debugger.info(f"Parsed - Name: {name}, Parent ID: {parent_id}, Child ID: {child_id}")
+            
+            if not parent_id or not child_id:
+                raise Exception("Could not extract parentId or childId from URL")
+            
+            return child_id, parent_id, name
+            
+        except Exception as e:
+            debugger.error(f"Error parsing direct link: {str(e)}")
+            raise Exception(f"Error parsing direct link: {str(e)}")
+
     async def start_batch_download(self, message: Message, user_id: int, video_id: str, video_name: str, batch_id: str, quality: Optional[int]):
-        """Start batch video download process"""
+        """Start batch video download process using mainLogic.main.Main"""
         
         # Store download info
         self.active_downloads[user_id] = {
@@ -513,19 +560,21 @@ This bot helps you download videos from PhysicsWallah using phone number login.
                 f"⏳ **Status:** Getting video URL and key..."
             )
             
+            # Create user-specific download directory
+            user_download_dir = os.path.join(config.DOWNLOAD_DIR, f"user_{user_id}")
+            os.makedirs(user_download_dir, exist_ok=True)
+            
             # Create progress callback
             async def progress_callback(progress_info):
                 try:
-                    media_type = progress_info['type']
-                    percentage = progress_info['percentage']
-                    current = progress_info['current']
-                    total = progress_info['total']
+                    progress_str = progress_info.get('str', '')
+                    progress_percent = progress_info.get('progress', 0)
                     
-                    status_text = f"⬬ **Downloading {media_type}:** {current}/{total} ({percentage:.1f}%)"
+                    status_text = f"⬬ **Progress:** {progress_percent:.1f}% - {progress_str}"
                     self.active_downloads[user_id]['status'] = status_text
                     
-                    # Update message every 10 segments to avoid rate limits
-                    if current % 10 == 0 or current == total:
+                    # Update message periodically to avoid rate limits
+                    if progress_percent % 10 < 1:  # Update every 10%
                         await status_msg.edit_text(
                             f"🚀 **Download in progress...**\n\n"
                             f"📹 **Video:** {video_name}\n"
@@ -537,64 +586,82 @@ This bot helps you download videos from PhysicsWallah using phone number login.
                 except Exception:
                     pass  # Ignore update errors
             
-            # Set progress callback
-            self.downloader.progress_callback = progress_callback
+            # Get dependencies using your existing checkup
+            state = self.ch.checkup(glv_var.EXECUTABLES, directory=user_download_dir, verbose=False, do_raise=True)
+            prefs = state['prefs']
             
-            # Start download in background
+            # Start download using your existing Main class
             loop = asyncio.get_event_loop()
-            output_file = await loop.run_in_executor(
+            await loop.run_in_executor(
                 None,
-                self.downloader.download_video,
+                self._run_main_download,
                 video_id,
-                batch_id,
                 video_name,
+                batch_id,
                 user_session["token"],
                 user_session["random_id"],
-                quality
+                user_download_dir,
+                state,
+                progress_callback
             )
             
-            # Download completed successfully
-            file_size = os.path.getsize(output_file) / (1024 * 1024)  # MB
+            # Find the downloaded file
+            output_file = None
+            for file in os.listdir(user_download_dir):
+                if file.endswith('.mp4') and video_name.replace(' ', '_') in file:
+                    output_file = os.path.join(user_download_dir, file)
+                    break
             
-            await status_msg.edit_text(
-                f"✅ **Download completed!**\n\n"
-                f"📹 **Video:** {video_name}\n"
-                f"📁 **File:** {os.path.basename(output_file)}\n"
-                f"📊 **Size:** {file_size:.1f} MB\n"
-                f"🎬 **Quality:** {quality or 'Best Available'}{quality_text}\n\n"
-                f"🎉 **Your video is ready!**"
-            )
+            if not output_file:
+                # Fallback: find any .mp4 file
+                for file in os.listdir(user_download_dir):
+                    if file.endswith('.mp4'):
+                        output_file = os.path.join(user_download_dir, file)
+                        break
             
-            # Send the video file if it's not too large
-            if file_size < 50:  # Telegram limit is 50MB for bots
-                try:
-                    await message.reply_video(
-                        video=output_file,
-                        caption=f"🎬 **{video_name}**\n\n📊 Size: {file_size:.1f} MB"
-                    )
-                except Exception as e:
+            if output_file and os.path.exists(output_file):
+                # Download completed successfully
+                file_size = os.path.getsize(output_file) / (1024 * 1024)  # MB
+                
+                await status_msg.edit_text(
+                    f"✅ **Download completed!**\n\n"
+                    f"📹 **Video:** {video_name}\n"
+                    f"📁 **File:** {os.path.basename(output_file)}\n"
+                    f"📊 **Size:** {file_size:.1f} MB\n"
+                    f"🎬 **Quality:** {quality or 'Best Available'}{quality_text}\n\n"
+                    f"🎉 **Your video is ready!**"
+                )
+                
+                # Send the video file if it's not too large
+                if file_size < 50:  # Telegram limit is 50MB for bots
+                    try:
+                        await message.reply_video(
+                            video=output_file,
+                            caption=f"🎬 **{video_name}**\n\n📊 Size: {file_size:.1f} MB"
+                        )
+                    except Exception as e:
+                        await message.reply_text(
+                            f"✅ **Download completed but file is too large to send via Telegram.**\n\n"
+                            f"📁 **File location:** `{output_file}`\n"
+                            f"📊 **Size:** {file_size:.1f} MB"
+                        )
+                else:
                     await message.reply_text(
-                        f"✅ **Download completed but file is too large to send via Telegram.**\n\n"
+                        f"✅ **Download completed but file is too large for Telegram.**\n\n"
                         f"📁 **File location:** `{output_file}`\n"
                         f"📊 **Size:** {file_size:.1f} MB"
                     )
             else:
-                await message.reply_text(
-                    f"✅ **Download completed but file is too large for Telegram.**\n\n"
-                    f"📁 **File location:** `{output_file}`\n"
-                    f"📊 **Size:** {file_size:.1f} MB"
+                await status_msg.edit_text(
+                    f"❌ **Download failed - Output file not found**\n\n"
+                    f"📹 **Video:** {video_name}\n"
+                    f"🆔 **ID:** {video_id}"
                 )
             
-        except PWAPIError as e:
+        except Exception as e:
+            debugger.error(f"Download failed: {str(e)}")
             await status_msg.edit_text(
                 f"❌ **Download failed!**\n\n"
-                f"📹 **Video:** {video_name}\n"
-                f"🆔 **ID:** {video_id}\n\n"
-                f"💥 **Error:** {str(e)}"
-            )
-        except Exception as e:
-            await status_msg.edit_text(
-                f"❌ **Unexpected error!**\n\n"
                 f"📹 **Video:** {video_name}\n"
                 f"🆔 **ID:** {video_id}\n\n"
                 f"💥 **Error:** {str(e)}"
@@ -608,121 +675,52 @@ This bot helps you download videos from PhysicsWallah using phone number login.
         """Start direct link download process"""
         
         try:
-            # Parse the link to get name
-            if ':' in link:
-                name = link.split(':', 1)[0].strip()
-            else:
-                name = "Video"
+            # Parse the link to get video_id, batch_id, and name
+            video_id, batch_id, name = self.parse_direct_link(link)
             
-            # Store download info
-            self.active_downloads[user_id] = {
-                "name": name,
-                "link": link,
-                "quality": quality,
-                "status": "Starting..."
-            }
+            # Use the batch download method with parsed data
+            await self.start_batch_download(message, user_id, video_id, name, batch_id, quality)
             
-            # Send initial status
-            quality_text = f" ({quality}p)" if quality else ""
-            status_msg = await message.reply_text(
-                f"🚀 **Starting download from link...**\n\n"
-                f"📹 **Video:** {name}\n"
-                f"🎬 **Quality:** {quality or 'Best Available'}{quality_text}\n\n"
-                f"⏳ **Status:** Initializing..."
-            )
-            
-            user_session = self.user_sessions[user_id]
-            
-            # Create progress callback
-            async def progress_callback(progress_info):
-                try:
-                    media_type = progress_info['type']
-                    percentage = progress_info['percentage']
-                    current = progress_info['current']
-                    total = progress_info['total']
-                    
-                    status_text = f"⬬ **Downloading {media_type}:** {current}/{total} ({percentage:.1f}%)"
-                    self.active_downloads[user_id]['status'] = status_text
-                    
-                    # Update message every 10 segments to avoid rate limits
-                    if current % 10 == 0 or current == total:
-                        await status_msg.edit_text(
-                            f"🚀 **Download in progress...**\n\n"
-                            f"📹 **Video:** {name}\n"
-                            f"🎬 **Quality:** {quality or 'Best Available'}{quality_text}\n\n"
-                            f"⏳ **Status:** {status_text}"
-                        )
-                except Exception:
-                    pass  # Ignore update errors
-            
-            # Set progress callback
-            self.downloader.progress_callback = progress_callback
-            
-            # Start download in background
-            loop = asyncio.get_event_loop()
-            output_file = await loop.run_in_executor(
-                None,
-                self.downloader.download_from_direct_link,
-                link,
-                user_session["token"],
-                user_session["random_id"],
-                quality
-            )
-            
-            # Download completed successfully
-            file_size = os.path.getsize(output_file) / (1024 * 1024)  # MB
-            
-            await status_msg.edit_text(
-                f"✅ **Download completed!**\n\n"
-                f"📹 **Video:** {name}\n"
-                f"📁 **File:** {os.path.basename(output_file)}\n"
-                f"📊 **Size:** {file_size:.1f} MB\n"
-                f"🎬 **Quality:** {quality or 'Best Available'}{quality_text}\n\n"
-                f"🎉 **Your video is ready!**"
-            )
-            
-            # Send the video file if it's not too large
-            if file_size < 50:  # Telegram limit is 50MB for bots
-                try:
-                    await message.reply_video(
-                        video=output_file,
-                        caption=f"🎬 **{name}**\n\n📊 Size: {file_size:.1f} MB"
-                    )
-                except Exception as e:
-                    await message.reply_text(
-                        f"✅ **Download completed but file is too large to send via Telegram.**\n\n"
-                        f"📁 **File location:** `{output_file}`\n"
-                        f"📊 **Size:** {file_size:.1f} MB"
-                    )
-            else:
-                await message.reply_text(
-                    f"✅ **Download completed but file is too large for Telegram.**\n\n"
-                    f"📁 **File location:** `{output_file}`\n"
-                    f"📊 **Size:** {file_size:.1f} MB"
-                )
-            
-        except PWAPIError as e:
-            await status_msg.edit_text(
-                f"❌ **Download failed!**\n\n"
-                f"📹 **Video:** {name}\n\n"
-                f"💥 **Error:** {str(e)}"
-            )
         except Exception as e:
-            await status_msg.edit_text(
-                f"❌ **Unexpected error!**\n\n"
-                f"📹 **Video:** {name}\n\n"
-                f"💥 **Error:** {str(e)}"
+            debugger.error(f"Link download failed: {str(e)}")
+            await message.reply_text(
+                f"❌ **Failed to parse link!**\n\n"
+                f"💥 **Error:** {str(e)}\n\n"
+                "Please check the link format."
             )
-        finally:
-            # Remove from active downloads
-            if user_id in self.active_downloads:
-                del self.active_downloads[user_id]
+
+    def _run_main_download(self, video_id: str, video_name: str, batch_id: str, token: str, random_id: str, 
+                          download_dir: str, state: dict, progress_callback):
+        """Run the main download using your existing Main class"""
+        try:
+            # Use your existing Main class for downloading
+            main_instance = Main(
+                id=video_id,
+                name=video_name,
+                batch_name=batch_id,
+                directory=download_dir,
+                ffmpeg=state['ffmpeg'],
+                token=token,
+                random_id=random_id,
+                mp4d=state['mp4decrypt'],
+                tmpDir=state.get('tmpDir', './tmp/'),
+                verbose=False,
+                progress_callback=progress_callback
+            )
+            
+            # Process the download
+            main_instance.process()
+            
+        except Exception as e:
+            debugger.error(f"Main download process failed: {str(e)}")
+            raise e
 
     def run(self):
         """Start the bot"""
         print("🤖 Starting PW Downloader Bot...")
         print(f"📁 Download directory: {config.DOWNLOAD_DIR}")
         print("📱 Phone-based login system enabled")
+        print("🔧 Using mainLogic components for downloading")
         
         # Create download directory
         Path(config.DOWNLOAD_DIR).mkdir(parents=True, exist_ok=True)
