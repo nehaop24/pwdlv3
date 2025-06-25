@@ -211,27 +211,54 @@ This bot helps you download videos from PhysicsWallah using phone number login.
                     token_data = login_instance.token
                     
                     if token_data:
-                        # Extract access token and random ID
-                        access_token = token_data.get('token') or token_data.get('access_token')
+                        # Extract access token and random ID using your project's format
+                        access_token = token_data.get('access_token') or token_data.get('token')
                         random_id = token_data.get('randomId', "a3e290fa-ea36-4012-9124-8908794c33aa")
                         
-                        # Store user session
-                        self.user_sessions[user_id] = {
-                            "token": access_token,
-                            "random_id": random_id,
-                            "phone_number": pending_login["phone_number"],
-                            "username": pending_login["username"]
-                        }
-                        
-                        # Remove pending login
-                        del self.pending_logins[user_id]
-                        
-                        await status_msg.edit_text(
-                            "✅ **Login successful!**\n\n"
-                            f"📱 **Phone:** {pending_login['phone_number']}\n"
-                            f"🎲 **Random ID:** `{random_id}`\n\n"
-                            "You can now download videos using `/download` or `/link` commands."
-                        )
+                        # Test token validity using your existing CheckState
+                        try:
+                            # Use your existing token validation method
+                            test_result = self.ch.check_token(
+                                access_token, 
+                                random_id, 
+                                id="680c85b0c9d776d19b869d3f",
+                                batch_name="65d75d320531c20018ade9bb",
+                                verbose=False
+                            )
+                            
+                            if test_result:
+                                # Store user session with validated token
+                                self.user_sessions[user_id] = {
+                                    "token": access_token,
+                                    "random_id": random_id,
+                                    "phone_number": pending_login["phone_number"],
+                                    "username": pending_login["username"],
+                                    "token_data": token_data  # Store full token data for reference
+                                }
+                                
+                                # Remove pending login
+                                del self.pending_logins[user_id]
+                                
+                                await status_msg.edit_text(
+                                    "✅ **Login successful!**\n\n"
+                                    f"📱 **Phone:** {pending_login['phone_number']}\n"
+                                    f"🎲 **Random ID:** `{random_id}`\n"
+                                    f"✅ **Token validated successfully**\n\n"
+                                    "You can now download videos using `/download` or `/link` commands."
+                                )
+                            else:
+                                await status_msg.edit_text(
+                                    "❌ **Token validation failed**\n\n"
+                                    "The token received from login is not valid for video downloads.\n"
+                                    "Please try logging in again with `/login`"
+                                )
+                        except Exception as validation_error:
+                            debugger.error(f"Token validation error: {str(validation_error)}")
+                            await status_msg.edit_text(
+                                f"❌ **Token validation failed**\n\n"
+                                f"Error: {str(validation_error)}\n\n"
+                                "Please try logging in again with `/login`"
+                            )
                     else:
                         await status_msg.edit_text(
                             "❌ **Login failed - Could not get access token**\n\n"
