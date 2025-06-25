@@ -51,10 +51,7 @@ class PWDownloadBot:
         try:
             logger.info(f"Validating token with mainLogic CheckState")
             
-            # Temporarily set the token in glv_var for validation
-            original_prefs = glv_var.vars.get('prefs', {})
-            
-            # Create token config similar to your system
+            # Set up the token structure exactly like your CLI does
             token_config = {
                 "access_token": token,
                 "token": token,
@@ -62,10 +59,12 @@ class PWDownloadBot:
                 "randomId": random_id
             }
             
-            # Set up temporary preferences for validation
-            temp_prefs = original_prefs.copy()
-            temp_prefs['token'] = token_config
-            glv_var.vars['prefs'] = temp_prefs
+            # Set up glv_var.vars['prefs'] with the token - this is crucial!
+            if 'prefs' not in glv_var.vars:
+                glv_var.vars['prefs'] = {}
+            
+            # Set the token in the format mainLogic expects
+            glv_var.vars['prefs']['token'] = token_config
             
             try:
                 # Use CheckState to validate token like your CLI does
@@ -86,9 +85,6 @@ class PWDownloadBot:
             except Exception as e:
                 logger.error(f"Token validation failed with exception: {str(e)}")
                 return False
-            finally:
-                # Restore original preferences
-                glv_var.vars['prefs'] = original_prefs
                 
         except Exception as e:
             logger.error(f"Error in mainLogic token validation: {str(e)}")
@@ -280,9 +276,17 @@ This bot downloads videos from PhysicsWallah using your token, exactly like the 
                 token_valid = self.validate_token_with_endpoint(token, random_id)
             
             if token_valid:
-                # Store user session
-                self.user_sessions[user_id] = {
+                # Store user session with the exact token structure mainLogic needs
+                token_config = {
+                    "access_token": token,
                     "token": token,
+                    "random_id": random_id,
+                    "randomId": random_id
+                }
+                
+                self.user_sessions[user_id] = {
+                    "token_config": token_config,  # Store the full config
+                    "token": token,  # Also store raw token for compatibility
                     "random_id": random_id,
                     "username": message.from_user.username or message.from_user.first_name,
                     "login_method": "token"
@@ -330,6 +334,14 @@ This bot downloads videos from PhysicsWallah using your token, exactly like the 
                     random_id = str(uuid.uuid4())  # Generate new random ID
                     
                     if access_token:
+                        # Create the token config structure that mainLogic expects
+                        token_config = {
+                            "access_token": access_token,
+                            "token": access_token,
+                            "random_id": random_id,
+                            "randomId": random_id
+                        }
+                        
                         # Validate token with mainLogic first, then fallback to endpoint
                         token_valid = self.validate_token_with_mainlogic(access_token, random_id)
                         if not token_valid:
@@ -337,9 +349,10 @@ This bot downloads videos from PhysicsWallah using your token, exactly like the 
                             token_valid = self.validate_token_with_endpoint(access_token, random_id)
                         
                         if token_valid:
-                            # Store user session
+                            # Store user session with the exact token structure mainLogic needs
                             self.user_sessions[user_id] = {
-                                "token": access_token,
+                                "token_config": token_config,  # Store the full config
+                                "token": access_token,  # Also store raw token for compatibility
                                 "random_id": random_id,
                                 "username": message.from_user.username or message.from_user.first_name,
                                 "login_method": "phone",
@@ -600,8 +613,7 @@ This bot downloads videos from PhysicsWallah using your token, exactly like the 
                 safe_name,
                 batch_id,
                 user_download_dir,
-                user_session["token"],
-                user_session["random_id"],
+                user_session["token_config"],  # Pass the full token config
                 progress_callback
             )
             
@@ -667,22 +679,14 @@ This bot downloads videos from PhysicsWallah using your token, exactly like the 
             if user_id in self.active_downloads:
                 del self.active_downloads[user_id]
 
-    def _run_main_download(self, video_id, name, batch_id, directory, token, random_id, progress_callback):
+    def _run_main_download(self, video_id, name, batch_id, directory, token_config, progress_callback):
         """Run the main download using mainLogic Main class - exactly like CLI"""
         try:
             logger.info(f"Starting mainLogic download for video_id: {video_id}, batch_id: {batch_id}")
             
-            # Set up the token in glv_var exactly like your CLI does
-            token_config = {
-                "access_token": token,
-                "token": token,
-                "random_id": random_id,
-                "randomId": random_id
-            }
-            
-            # Set up preferences like your CLI
+            # Set up glv_var.vars['prefs'] exactly like your CLI does
             glv_var.vars['prefs'] = {
-                'token': token_config,
+                'token': token_config,  # Use the full token config
                 'dir': directory,
                 'tmpDir': './tmp/'
             }
