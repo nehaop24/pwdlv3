@@ -9,6 +9,7 @@ from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 
 from config import config
 from downloader import PWDownloader, PWAPIError
+from pw_api import MPDParser, LicenseKeyFetcher
 
 class PWDownloadBot:
     def __init__(self):
@@ -43,16 +44,19 @@ This bot helps you download videos from PhysicsWallah using your token.
 
 **Commands:**
 /login - Set your PW token and random ID
-/download - Download a video
+/download - Download a video using video ID and batch ID
+/link - Download from direct MPD link
+/quality - Check available qualities for a video
 /status - Check your login status
 /help - Show this help message
 
 **Usage:**
 1. First, use /login to set your credentials
-2. Then use /download with video details
+2. Then use /download or /link to download videos
 
-**Example:**
+**Examples:**
 `/download 6854310c752ef68ab0116a71 "My Video" 678b4cf5a3a368218a2b16e7`
+`/link Kinetic Theory:https://d1d34p8vz63oiq.cloudfront.net/c3905743.../master.mpd?parentId=...&childId=...`
             """
             
             keyboard = InlineKeyboardMarkup([
@@ -79,10 +83,22 @@ This bot helps you download videos from PhysicsWallah using your token.
    `/login your_token your_random_id`
 
 **3. Download videos:**
-   `/download video_id "video_name" batch_id`
+   **Method 1 - Using video ID and batch ID:**
+   `/download video_id "video_name" batch_id [quality]`
+   
+   **Method 2 - Using direct MPD link:**
+   `/link Video Name:https://d1d34p8vz63oiq.cloudfront.net/.../master.mpd?parentId=...&childId=...`
 
-**Example:**
-`/download 6854310c752ef68ab0116a71 "Physics Lecture" 678b4cf5a3a368218a2b16e7`
+**4. Check available qualities:**
+   `/quality video_id batch_id` or `/quality direct_link`
+
+**Quality Options:**
+- 240, 360, 480, 720, 1080 (specify the height in pixels)
+- If not specified, highest available quality is used
+
+**Examples:**
+`/download 6854310c752ef68ab0116a71 "Physics Lecture" 678b4cf5a3a368218a2b16e7 720`
+`/link Kinetic Theory:https://d1d34p8vz63oiq.cloudfront.net/c3905743.../master.mpd?parentId=...&childId=...`
 
 **Notes:**
 - Video name should be in quotes if it contains spaces
@@ -126,7 +142,7 @@ This bot helps you download videos from PhysicsWallah using your token.
             
             await message.reply_text(
                 "✅ **Login successful!**\n\n"
-                "You can now download videos using `/download` command."
+                "You can now download videos using `/download` or `/link` commands."
             )
 
         @self.app.on_message(filters.command("download"))
@@ -179,18 +195,134 @@ This bot helps you download videos from PhysicsWallah using your token.
             if len(parts) < 3:
                 await message.reply_text(
                     "❌ **Invalid format!**\n\n"
-                    "Use: `/download video_id \"video_name\" batch_id`\n\n"
+                    "Use: `/download video_id \"video_name\" batch_id [quality]`\n\n"
                     "Example:\n"
-                    "`/download 6854310c752ef68ab0116a71 \"Physics Lecture\" 678b4cf5a3a368218a2b16e7`"
+                    "`/download 6854310c752ef68ab0116a71 \"Physics Lecture\" 678b4cf5a3a368218a2b16e7 720`"
                 )
                 return
             
             video_id = parts[0]
             video_name = parts[1]
             batch_id = parts[2]
+            quality = None
+            
+            if len(parts) > 3:
+                try:
+                    quality = int(parts[3])
+                except ValueError:
+                    await message.reply_text("❌ **Invalid quality format!** Quality should be a number (e.g., 720)")
+                    return
             
             # Start download
-            await self.start_download(message, user_id, video_id, video_name, batch_id)
+            await self.start_batch_download(message, user_id, video_id, video_name, batch_id, quality)
+
+        @self.app.on_message(filters.command("link"))
+        async def link_command(client, message: Message):
+            user_id = message.from_user.id
+            
+            # Check if user is logged in
+            if user_id not in self.user_sessions:
+                keyboard = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔑 Login Now", callback_data="login")]
+                ])
+                await message.reply_text(
+                    "❌ **You need to login first!**\n\n"
+                    "Use `/login your_token your_random_id`",
+                    reply_markup=keyboard
+                )
+                return
+            
+            # Check if user has active download
+            if user_id in self.active_downloads:
+                await message.reply_text(
+                    "⏳ **You already have an active download!**\n\n"
+                    "Please wait for it to complete or use /status to check progress."
+                )
+                return
+            
+            # Parse link command
+            text = message.text[6:]  # Remove "/link "
+            if not text.strip():
+                await message.reply_text(
+                    "❌ **Invalid format!**\n\n"
+                    "Use: `/link Video Name:https://d1d34p8vz63oiq.cloudfront.net/.../master.mpd?parentId=...&childId=...`\n\n"
+                    "Or: `/link https://d1d34p8vz63oiq.cloudfront.net/.../master.mpd?parentId=...&childId=... [quality]`"
+                )
+                return
+            
+            # Parse quality if provided
+            parts = text.strip().split()
+            link = parts[0]
+            quality = None
+            
+            if len(parts) > 1:
+                try:
+                    quality = int(parts[1])
+                except ValueError:
+                    await message.reply_text("❌ **Invalid quality format!** Quality should be a number (e.g., 720)")
+                    return
+            
+            # Start download
+            await self.start_link_download(message, user_id, link, quality)
+
+        @self.app.on_message(filters.command("quality"))
+        async def quality_command(client, message: Message):
+            user_id = message.from_user.id
+            
+            # Check if user is logged in
+            if user_id not in self.user_sessions:
+                await message.reply_text("❌ **You need to login first!**")
+                return
+            
+            # Parse quality command
+            text = message.text[9:]  # Remove "/quality "
+            parts = text.strip().split()
+            
+            if len(parts) < 1:
+                await message.reply_text(
+                    "❌ **Invalid format!**\n\n"
+                    "Use: `/quality video_id batch_id` or `/quality direct_link`"
+                )
+                return
+            
+            try:
+                user_session = self.user_sessions[user_id]
+                fetcher = LicenseKeyFetcher(user_session["token"], user_session["random_id"])
+                
+                if len(parts) == 2:
+                    # video_id and batch_id provided
+                    video_id, batch_id = parts[0], parts[1]
+                    mpd_url, _, _ = fetcher.get_video_url_and_key(video_id, batch_id)
+                elif len(parts) == 1:
+                    # Direct link provided
+                    link = parts[0]
+                    if ':' in link:
+                        mpd_url = link.split(':', 1)[1].strip()
+                    else:
+                        mpd_url = link.strip()
+                else:
+                    await message.reply_text("❌ **Invalid format!**")
+                    return
+                
+                # Parse MPD and get qualities
+                parser = MPDParser(mpd_url)
+                qualities = parser.get_available_qualities()
+                
+                if qualities:
+                    quality_text = "📺 **Available Qualities:**\n\n"
+                    for q in qualities:
+                        bandwidth_mb = f" ({q['bandwidth']//1000} kbps)" if q['bandwidth'] else ""
+                        quality_text += f"• **{q['height']}p** ({q['width']}x{q['height']}){bandwidth_mb}\n"
+                    
+                    quality_text += "\n💡 **Usage:** Add quality number to your download command\n"
+                    quality_text += "Example: `/download video_id \"name\" batch_id 720`"
+                else:
+                    quality_text = "❌ **No quality information found**"
+                
+                await message.reply_text(quality_text)
+                
+            except Exception as e:
+                await message.reply_text(f"❌ **Error getting quality info:** {str(e)}")
 
         @self.app.on_message(filters.command("status"))
         async def status_command(client, message: Message):
@@ -209,8 +341,8 @@ This bot helps you download videos from PhysicsWallah using your token.
 📊 **Download Status**
 
 📹 **Video:** {download_info['name']}
-🆔 **ID:** {download_info['video_id']}
-📦 **Batch:** {download_info['batch_id']}
+🆔 **ID:** {download_info.get('video_id', 'N/A')}
+📦 **Batch:** {download_info.get('batch_id', 'N/A')}
 
 ⏳ **Status:** {download_info.get('status', 'Starting...')}
             """
@@ -233,23 +365,26 @@ This bot helps you download videos from PhysicsWallah using your token.
                     "Get your credentials from pw.live browser developer tools."
                 )
 
-    async def start_download(self, message: Message, user_id: int, video_id: str, video_name: str, batch_id: str):
-        """Start video download process"""
+    async def start_batch_download(self, message: Message, user_id: int, video_id: str, video_name: str, batch_id: str, quality: Optional[int]):
+        """Start batch video download process"""
         
         # Store download info
         self.active_downloads[user_id] = {
             "video_id": video_id,
             "name": video_name,
             "batch_id": batch_id,
+            "quality": quality,
             "status": "Starting..."
         }
         
         # Send initial status
+        quality_text = f" ({quality}p)" if quality else ""
         status_msg = await message.reply_text(
             f"🚀 **Starting download...**\n\n"
             f"📹 **Video:** {video_name}\n"
             f"🆔 **ID:** {video_id}\n"
-            f"📦 **Batch:** {batch_id}\n\n"
+            f"📦 **Batch:** {batch_id}\n"
+            f"🎬 **Quality:** {quality or 'Best Available'}{quality_text}\n\n"
             f"⏳ **Status:** Initializing..."
         )
         
@@ -261,7 +396,8 @@ This bot helps you download videos from PhysicsWallah using your token.
                 f"🚀 **Download in progress...**\n\n"
                 f"📹 **Video:** {video_name}\n"
                 f"🆔 **ID:** {video_id}\n"
-                f"📦 **Batch:** {batch_id}\n\n"
+                f"📦 **Batch:** {batch_id}\n"
+                f"🎬 **Quality:** {quality or 'Best Available'}{quality_text}\n\n"
                 f"⏳ **Status:** Getting video URL and key..."
             )
             
@@ -282,7 +418,8 @@ This bot helps you download videos from PhysicsWallah using your token.
                             f"🚀 **Download in progress...**\n\n"
                             f"📹 **Video:** {video_name}\n"
                             f"🆔 **ID:** {video_id}\n"
-                            f"📦 **Batch:** {batch_id}\n\n"
+                            f"📦 **Batch:** {batch_id}\n"
+                            f"🎬 **Quality:** {quality or 'Best Available'}{quality_text}\n\n"
                             f"⏳ **Status:** {status_text}"
                         )
                 except Exception:
@@ -300,7 +437,8 @@ This bot helps you download videos from PhysicsWallah using your token.
                 batch_id,
                 video_name,
                 user_session["token"],
-                user_session["random_id"]
+                user_session["random_id"],
+                quality
             )
             
             # Download completed successfully
@@ -310,7 +448,8 @@ This bot helps you download videos from PhysicsWallah using your token.
                 f"✅ **Download completed!**\n\n"
                 f"📹 **Video:** {video_name}\n"
                 f"📁 **File:** {os.path.basename(output_file)}\n"
-                f"📊 **Size:** {file_size:.1f} MB\n\n"
+                f"📊 **Size:** {file_size:.1f} MB\n"
+                f"🎬 **Quality:** {quality or 'Best Available'}{quality_text}\n\n"
                 f"🎉 **Your video is ready!**"
             )
             
@@ -346,6 +485,120 @@ This bot helps you download videos from PhysicsWallah using your token.
                 f"❌ **Unexpected error!**\n\n"
                 f"📹 **Video:** {video_name}\n"
                 f"🆔 **ID:** {video_id}\n\n"
+                f"💥 **Error:** {str(e)}"
+            )
+        finally:
+            # Remove from active downloads
+            if user_id in self.active_downloads:
+                del self.active_downloads[user_id]
+
+    async def start_link_download(self, message: Message, user_id: int, link: str, quality: Optional[int]):
+        """Start direct link download process"""
+        
+        try:
+            # Parse the link to get name
+            if ':' in link:
+                name = link.split(':', 1)[0].strip()
+            else:
+                name = "Video"
+            
+            # Store download info
+            self.active_downloads[user_id] = {
+                "name": name,
+                "link": link,
+                "quality": quality,
+                "status": "Starting..."
+            }
+            
+            # Send initial status
+            quality_text = f" ({quality}p)" if quality else ""
+            status_msg = await message.reply_text(
+                f"🚀 **Starting download from link...**\n\n"
+                f"📹 **Video:** {name}\n"
+                f"🎬 **Quality:** {quality or 'Best Available'}{quality_text}\n\n"
+                f"⏳ **Status:** Initializing..."
+            )
+            
+            user_session = self.user_sessions[user_id]
+            
+            # Create progress callback
+            async def progress_callback(progress_info):
+                try:
+                    media_type = progress_info['type']
+                    percentage = progress_info['percentage']
+                    current = progress_info['current']
+                    total = progress_info['total']
+                    
+                    status_text = f"⬬ **Downloading {media_type}:** {current}/{total} ({percentage:.1f}%)"
+                    self.active_downloads[user_id]['status'] = status_text
+                    
+                    # Update message every 10 segments to avoid rate limits
+                    if current % 10 == 0 or current == total:
+                        await status_msg.edit_text(
+                            f"🚀 **Download in progress...**\n\n"
+                            f"📹 **Video:** {name}\n"
+                            f"🎬 **Quality:** {quality or 'Best Available'}{quality_text}\n\n"
+                            f"⏳ **Status:** {status_text}"
+                        )
+                except Exception:
+                    pass  # Ignore update errors
+            
+            # Set progress callback
+            self.downloader.progress_callback = progress_callback
+            
+            # Start download in background
+            loop = asyncio.get_event_loop()
+            output_file = await loop.run_in_executor(
+                None,
+                self.downloader.download_from_direct_link,
+                link,
+                user_session["token"],
+                user_session["random_id"],
+                quality
+            )
+            
+            # Download completed successfully
+            file_size = os.path.getsize(output_file) / (1024 * 1024)  # MB
+            
+            await status_msg.edit_text(
+                f"✅ **Download completed!**\n\n"
+                f"📹 **Video:** {name}\n"
+                f"📁 **File:** {os.path.basename(output_file)}\n"
+                f"📊 **Size:** {file_size:.1f} MB\n"
+                f"🎬 **Quality:** {quality or 'Best Available'}{quality_text}\n\n"
+                f"🎉 **Your video is ready!**"
+            )
+            
+            # Send the video file if it's not too large
+            if file_size < 50:  # Telegram limit is 50MB for bots
+                try:
+                    await message.reply_video(
+                        video=output_file,
+                        caption=f"🎬 **{name}**\n\n📊 Size: {file_size:.1f} MB"
+                    )
+                except Exception as e:
+                    await message.reply_text(
+                        f"✅ **Download completed but file is too large to send via Telegram.**\n\n"
+                        f"📁 **File location:** `{output_file}`\n"
+                        f"📊 **Size:** {file_size:.1f} MB"
+                    )
+            else:
+                await message.reply_text(
+                    f"✅ **Download completed but file is too large for Telegram.**\n\n"
+                    f"📁 **File location:** `{output_file}`\n"
+                    f"📊 **Size:** {file_size:.1f} MB"
+                )
+            
+        except PWAPIError as e:
+            await status_msg.edit_text(
+                f"❌ **Download failed!**\n\n"
+                f"📹 **Video:** {name}\n\n"
+                f"💥 **Error:** {str(e)}"
+            )
+        except Exception as e:
+            await status_msg.edit_text(
+                f"❌ **Unexpected error!**\n\n"
+                f"📹 **Video:** {name}\n\n"
                 f"💥 **Error:** {str(e)}"
             )
         finally:

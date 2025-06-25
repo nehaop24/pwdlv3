@@ -251,12 +251,14 @@ class PWDownloader:
             print(f"Error during merge: {str(e)}")
             return False
 
-    def download_video(self, video_id: str, batch_name: str, name: str, token: str, random_id: str) -> Optional[str]:
-        """Main download function"""
+    def download_video(self, video_id: str, batch_name: str, name: str, token: str, random_id: str, quality: Optional[int] = None) -> Optional[str]:
+        """Main download function for batch videos"""
         try:
             print(f"Starting download for: {name}")
             print(f"Video ID: {video_id}")
             print(f"Batch: {batch_name}")
+            if quality:
+                print(f"Target Quality: {quality}p")
             
             # Initialize API client
             fetcher = LicenseKeyFetcher(token, random_id)
@@ -268,7 +270,7 @@ class PWDownloader:
             # Parse MPD and get segment URLs
             print("Parsing MPD manifest...")
             parser = MPDParser(mpd_url)
-            segment_urls = parser.get_segment_urls()
+            segment_urls = parser.get_segment_urls(target_height=quality)
             
             # Create download directories
             download_id = f"{name}_{video_id}"
@@ -305,6 +307,99 @@ class PWDownloader:
             
             # Merge audio and video
             final_output = str(self.out_dir / f"{name}.mp4")
+            print("Merging audio and video...")
+            if not self._merge_audio_video(audio_decrypted, video_decrypted, final_output):
+                raise PWAPIError("Audio/video merge failed")
+            
+            # Cleanup temporary files
+            try:
+                os.remove(audio_encrypted)
+                os.remove(video_encrypted)
+                os.remove(audio_decrypted)
+                os.remove(video_decrypted)
+                
+                # Remove temporary directories
+                import shutil
+                shutil.rmtree(self.tmp_dir / download_id, ignore_errors=True)
+            except Exception as e:
+                print(f"Cleanup warning: {str(e)}")
+            
+            print(f"Download completed successfully: {final_output}")
+            return final_output
+            
+        except Exception as e:
+            print(f"Download failed: {str(e)}")
+            raise PWAPIError(f"Download failed: {str(e)}")
+
+    def download_from_direct_link(self, link: str, token: str, random_id: str, quality: Optional[int] = None) -> Optional[str]:
+        """Download from direct MPD link"""
+        try:
+            # Initialize API client
+            fetcher = LicenseKeyFetcher(token, random_id)
+            
+            # Parse the direct link
+            video_id, batch_id, name = fetcher.parse_direct_link(link)
+            print(f"Parsed link - Video ID: {video_id}, Batch ID: {batch_id}, Name: {name}")
+            
+            # Extract MPD URL from the link
+            if ':' in link:
+                mpd_url = link.split(':', 1)[1].strip()
+            else:
+                mpd_url = link.strip()
+            
+            # Get decryption key for the direct link
+            print("Getting decryption key...")
+            mpd_url, key, cookies = fetcher.get_video_url_and_key_from_direct_link(mpd_url)
+            
+            # Parse MPD and get segment URLs
+            print("Parsing MPD manifest...")
+            parser = MPDParser(mpd_url)
+            
+            # Show available qualities
+            qualities = parser.get_available_qualities()
+            if qualities:
+                print("Available qualities:")
+                for q in qualities:
+                    print(f"  - {q['label']} ({q['height']}p)")
+            
+            segment_urls = parser.get_segment_urls(target_height=quality)
+            
+            # Create download directories
+            safe_name = "".join(c for c in name if c.isalnum() or c in (' ', '-', '_')).rstrip()
+            download_id = f"{safe_name}_{video_id}"
+            audio_dir = self.tmp_dir / download_id / "audio"
+            video_dir = self.tmp_dir / download_id / "video"
+            audio_dir.mkdir(parents=True, exist_ok=True)
+            video_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Download audio and video segments
+            print("Downloading audio segments...")
+            audio_result = self._download_media(segment_urls['audio'], "audio", audio_dir)
+            
+            print("Downloading video segments...")
+            video_result = self._download_media(segment_urls['video'], "video", video_dir)
+            
+            # Concatenate segments
+            print("Concatenating audio segments...")
+            audio_encrypted = self._concatenate_segments(audio_dir, f"{safe_name}_audio_encrypted.mp4")
+            
+            print("Concatenating video segments...")
+            video_encrypted = self._concatenate_segments(video_dir, f"{safe_name}_video_encrypted.mp4")
+            
+            # Decrypt files
+            audio_decrypted = str(self.out_dir / f"{safe_name}_audio.mp4")
+            video_decrypted = str(self.out_dir / f"{safe_name}_video.mp4")
+            
+            print("Decrypting audio...")
+            if not self._decrypt_file(audio_encrypted, key, audio_decrypted):
+                raise PWAPIError("Audio decryption failed")
+            
+            print("Decrypting video...")
+            if not self._decrypt_file(video_encrypted, key, video_decrypted):
+                raise PWAPIError("Video decryption failed")
+            
+            # Merge audio and video
+            final_output = str(self.out_dir / f"{safe_name}.mp4")
             print("Merging audio and video...")
             if not self._merge_audio_video(audio_decrypted, video_decrypted, final_output):
                 raise PWAPIError("Audio/video merge failed")

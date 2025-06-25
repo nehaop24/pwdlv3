@@ -5,7 +5,7 @@ import base64
 import xmltodict
 import isodate
 from typing import Dict, Optional, Tuple, List
-from urllib.parse import urlparse, unquote
+from urllib.parse import urlparse, parse_qs, unquote
 from config import config
 
 class PWAPIError(Exception):
@@ -74,11 +74,37 @@ class LicenseKeyFetcher:
         except Exception as e:
             raise PWAPIError(f"Error extracting KID: {str(e)}")
 
-    def get_video_url_and_key(self, video_id: str, batch_name: str) -> Tuple[str, str, str]:
+    def parse_direct_link(self, link: str) -> Tuple[str, str, str]:
+        """Parse direct MPD link to extract video_id, batch_id, and MPD URL"""
+        try:
+            # Split by the colon to separate name and URL
+            if ':' in link:
+                name, url = link.split(':', 1)
+                name = name.strip()
+            else:
+                url = link.strip()
+                name = "Video"
+            
+            # Parse URL to extract parentId and childId
+            parsed_url = urlparse(url)
+            query_params = parse_qs(parsed_url.query)
+            
+            parent_id = query_params.get('parentId', [None])[0]
+            child_id = query_params.get('childId', [None])[0]
+            
+            if not parent_id or not child_id:
+                raise PWAPIError("Could not extract parentId or childId from URL")
+            
+            return child_id, parent_id, name
+            
+        except Exception as e:
+            raise PWAPIError(f"Error parsing direct link: {str(e)}")
+
+    def get_video_url_and_key(self, video_id: str, batch_id: str) -> Tuple[str, str, str]:
         """Get video URL and decryption key"""
         try:
             # Get video URL details
-            url_endpoint = f"https://api.penpencil.co/v1/videos/video-url-details?type=BATCHES&childId={video_id}&parentId={batch_name}&reqType=query&videoContainerType=DASH"
+            url_endpoint = f"https://api.penpencil.co/v1/videos/video-url-details?type=BATCHES&childId={video_id}&parentId={batch_id}&reqType=query&videoContainerType=DASH"
             
             headers = self.get_otp_headers()
             response = requests.get(url_endpoint, headers=headers)
@@ -130,6 +156,42 @@ class LicenseKeyFetcher:
         except Exception as e:
             raise PWAPIError(f"Error getting video URL and key: {str(e)}")
 
+    def get_video_url_and_key_from_direct_link(self, mpd_url: str) -> Tuple[str, str, str]:
+        """Get decryption key for direct MPD URL"""
+        try:
+            # Extract KID from MPD
+            kid = self.extract_kid_from_mpd(mpd_url)
+            if not kid:
+                raise PWAPIError("Could not extract KID from MPD")
+            
+            kid_clean = kid.replace("-", "")
+            
+            # Get decryption key
+            otp_key = self.b64_encode(self.xor_encrypt(kid_clean))
+            encoded_otp_key_step1 = otp_key.encode('utf-8').hex()
+            encoded_otp_key = self.insert_zeros(encoded_otp_key_step1)
+            
+            license_url = self.build_license_url(encoded_otp_key)
+            headers = self.get_otp_headers()
+            
+            response = requests.get(license_url, headers=headers)
+            if response.status_code != 200:
+                raise PWAPIError(f"Failed to get license. Status: {response.status_code}")
+            
+            license_data = response.json()
+            if not license_data.get('success') or 'data' not in license_data:
+                raise PWAPIError("Invalid response from license API")
+            
+            key = self.get_key_final(license_data['data']['otp'])
+            
+            # Extract cookies from URL if present
+            self.cookies = self._extract_cookies_from_url(mpd_url)
+            
+            return mpd_url, key, self.cookies
+            
+        except Exception as e:
+            raise PWAPIError(f"Error getting key for direct link: {str(e)}")
+
     def _extract_cookies_from_signature(self, signature: str) -> str:
         """Extract cookies from URL signature"""
         try:
@@ -156,6 +218,27 @@ class LicenseKeyFetcher:
             for param_key, cookie_key in cookie_mappings.items():
                 if param_key in params:
                     cookies.append(f"{cookie_key}={params[param_key]}")
+            
+            return '; '.join(cookies)
+        except Exception:
+            return ""
+
+    def _extract_cookies_from_url(self, url: str) -> str:
+        """Extract cookies from full MPD URL"""
+        try:
+            parsed_url = urlparse(url)
+            query_params = parse_qs(parsed_url.query)
+            
+            cookie_mappings = {
+                'Policy': 'CloudFront-Policy',
+                'Signature': 'CloudFront-Signature', 
+                'Key-Pair-Id': 'CloudFront-Key-Pair-Id'
+            }
+            
+            cookies = []
+            for param_key, cookie_key in cookie_mappings.items():
+                if param_key in query_params:
+                    cookies.append(f"{cookie_key}={query_params[param_key][0]}")
             
             return '; '.join(cookies)
         except Exception:
@@ -204,8 +287,56 @@ class MPDParser:
         
         return f"{url}?{self.signature}" if self.signature else url
 
-    def get_segment_urls(self) -> Dict:
-        """Extract all segment URLs for audio and video"""
+    def get_available_qualities(self) -> List[Dict]:
+        """Get available video qualities"""
+        if not self.mpd_dict:
+            self.load_and_parse()
+        
+        try:
+            period = self.mpd_dict["MPD"]["Period"]
+            if isinstance(period, list):
+                period = period[0]
+            
+            adaptation_sets = period["AdaptationSet"]
+            if not isinstance(adaptation_sets, list):
+                adaptation_sets = [adaptation_sets]
+            
+            qualities = []
+            
+            for adaptation_set in adaptation_sets:
+                content_type = adaptation_set.get("@contentType", "")
+                
+                if content_type == "video":
+                    representations = adaptation_set.get("Representation", [])
+                    if not isinstance(representations, list):
+                        representations = [representations]
+                    
+                    for rep in representations:
+                        height = rep.get("@height")
+                        width = rep.get("@width")
+                        bandwidth = rep.get("@bandwidth")
+                        
+                        if height:
+                            quality_label = f"{height}p"
+                            if width:
+                                quality_label = f"{width}x{height}"
+                            
+                            qualities.append({
+                                "height": int(height),
+                                "width": int(width) if width else None,
+                                "bandwidth": int(bandwidth) if bandwidth else None,
+                                "label": quality_label
+                            })
+            
+            # Sort by height (quality) descending
+            qualities.sort(key=lambda x: x["height"], reverse=True)
+            return qualities
+            
+        except Exception as e:
+            raise PWAPIError(f"Error extracting qualities: {str(e)}")
+
+    def get_segment_urls(self, target_height: Optional[int] = None) -> Dict:
+        """Extract all segment URLs for audio and video with quality selection"""
         if not self.mpd_dict:
             self.load_and_parse()
         
@@ -231,14 +362,16 @@ class MPDParser:
                     if not isinstance(representations, list):
                         representations = [representations]
                     
-                    # Use first representation or best quality for video
+                    # Select representation based on quality preference
                     if content_type == "video" and len(representations) > 1:
-                        # Try to find 720p or best available
-                        best_rep = representations[0]
-                        for rep in representations:
-                            if rep.get("@height") == "720":
-                                best_rep = rep
-                                break
+                        if target_height:
+                            # Find exact match or closest
+                            best_rep = min(representations, 
+                                         key=lambda x: abs(int(x.get("@height", "0")) - target_height))
+                        else:
+                            # Default to highest quality
+                            best_rep = max(representations, 
+                                         key=lambda x: int(x.get("@height", "0")))
                         representation = best_rep
                     else:
                         representation = representations[0]

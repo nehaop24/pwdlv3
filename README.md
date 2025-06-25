@@ -1,10 +1,12 @@
 # PW Video Downloader Telegram Bot
 
-A Telegram bot that downloads videos from PhysicsWallah (pw.live) using user tokens.
+A Telegram bot that downloads videos from PhysicsWallah (pw.live) using user tokens. Supports both batch downloads and direct MPD links with quality selection.
 
 ## Features
 
 - 🎓 Download PW videos directly through Telegram
+- 🔗 Support for direct MPD links
+- 🎬 Quality selection (240p, 360p, 480p, 720p, 1080p)
 - 🔐 Secure token-based authentication
 - 📊 Real-time download progress
 - 🎬 Automatic video delivery (for files under 50MB)
@@ -74,33 +76,72 @@ python bot.py
 
 - `/start` - Start the bot
 - `/login token random_id` - Set your PW credentials
-- `/download video_id "video_name" batch_id` - Download a video
+- `/download video_id "video_name" batch_id [quality]` - Download using IDs
+- `/link Video Name:mpd_url [quality]` - Download from direct link
+- `/quality video_id batch_id` or `/quality direct_link` - Check available qualities
 - `/status` - Check download status
 - `/help` - Show help
 
 ### 3. Example Usage
 
+**Login:**
 ```
 /login eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9... a3e290fa-ea36-4012-9124-8908794c33aa
-
-/download 6854310c752ef68ab0116a71 "Physics Lecture" 678b4cf5a3a368218a2b16e7
 ```
+
+**Download using video ID and batch ID:**
+```
+/download 6854310c752ef68ab0116a71 "Physics Lecture" 678b4cf5a3a368218a2b16e7 720
+```
+
+**Download from direct link:**
+```
+/link Kinetic Theory of Gases:https://d1d34p8vz63oiq.cloudfront.net/c3905743-cd7e-49d7-b472-4a8f11444beb/master.mpd?parentId=63fc53f28aac0a001871320d&childId=6583cf6da25635465b7e6430
+```
+
+**Check available qualities:**
+```
+/quality 6854310c752ef68ab0116a71 678b4cf5a3a368218a2b16e7
+```
+
+## Quality Options
+
+The bot supports the following quality options:
+- **240p** - Low quality, smaller file size
+- **360p** - Standard quality
+- **480p** - Good quality
+- **720p** - HD quality (recommended)
+- **1080p** - Full HD quality (if available)
+
+If no quality is specified, the bot will automatically select the highest available quality.
+
+## Direct Link Format
+
+For direct MPD links, use this format:
+```
+Video Name:https://d1d34p8vz63oiq.cloudfront.net/video_id/master.mpd?parentId=batch_id&childId=video_id
+```
+
+Where:
+- `parentId` = batch ID
+- `childId` = video ID
 
 ## How It Works
 
 1. **Authentication**: Users provide their PW token and random ID
 2. **Video URL Extraction**: Bot fetches video URLs and decryption keys from PW API
-3. **MPD Parsing**: Parses the DASH manifest to get segment URLs
-4. **Segment Download**: Downloads audio and video segments concurrently
-5. **Decryption**: Decrypts segments using mp4decrypt
-6. **Merging**: Combines audio and video using ffmpeg
-7. **Delivery**: Sends the final video file via Telegram
+3. **Quality Selection**: Bot analyzes available qualities and selects based on user preference
+4. **MPD Parsing**: Parses the DASH manifest to get segment URLs
+5. **Segment Download**: Downloads audio and video segments concurrently
+6. **Decryption**: Decrypts segments using mp4decrypt
+7. **Merging**: Combines audio and video using ffmpeg
+8. **Delivery**: Sends the final video file via Telegram
 
 ## File Structure
 
 ```
 ├── bot.py              # Main bot application
-├── pw_api.py           # PW API client and MPD parser
+├── pw_api.py           # PW API client and MPD parser with quality support
 ├── downloader.py       # Download and processing logic
 ├── config.py           # Configuration management
 ├── requirements.txt    # Python dependencies
@@ -142,6 +183,10 @@ python bot.py
    - Check if token is still valid
    - Verify video_id and batch_id are correct
    - Check network connectivity
+
+5. **Quality not available**
+   - Use `/quality` command to check available qualities
+   - Bot will automatically select closest available quality
 
 ## Contributing
 
