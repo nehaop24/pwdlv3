@@ -61,7 +61,8 @@ class PWDownloadBot:
             
             # CRITICAL: Create a temporary preferences file with our token
             # This is the only way to ensure mainLogic uses our token
-            temp_prefs_file = "/tmp/temp_preferences.json"
+            # Use a consistent filename without dynamic parts
+            temp_prefs_file = "/tmp/temp_preferences_validation.json"
             temp_prefs = {
                 'cloudfront_id': 'd1d34p8vz63oiq',
                 'patched': False,
@@ -727,7 +728,8 @@ This bot downloads videos from PhysicsWallah using your token, exactly like the 
             logger.info(f"Starting mainLogic download for video_id: {video_id}, batch_id: {batch_id}")
             
             # Create a temporary preferences file with our token
-            temp_prefs_file = f"/tmp/temp_preferences_{video_id}.json"
+            # Use a consistent filename for downloads
+            temp_prefs_file = f"/tmp/temp_preferences_download.json"
             temp_prefs = {
                 'cloudfront_id': 'd1d34p8vz63oiq',
                 'patched': False,
