@@ -46,8 +46,48 @@ class PWDownloadBot:
         
         self.setup_handlers()
 
+    def validate_token_with_mainlogic(self, token: str, random_id: str) -> bool:
+        """Validate token using mainLogic's LicenseKeyFetcher"""
+        try:
+            logger.info(f"Validating token with mainLogic LicenseKeyFetcher")
+            
+            # Use your mainLogic's LicenseKeyFetcher to test token
+            fetcher = LicenseKeyFetcher(token, random_id)
+            
+            # Test with a simple key fetch operation
+            test_video_id = "680c85b0c9d776d19b869d3f"
+            test_batch_id = "65d75d320531c20018ade9bb"
+            
+            logger.info(f"Testing token with video_id: {test_video_id}, batch_id: {test_batch_id}")
+            
+            try:
+                # This will test the token by trying to get a key
+                key_result = fetcher.get_key(
+                    id=test_video_id,
+                    batch_name=test_batch_id,
+                    verbose=False
+                )
+                
+                if key_result and len(key_result) >= 2:
+                    logger.info("Token validation successful with mainLogic")
+                    return True
+                else:
+                    logger.warning("Token validation failed - no key returned")
+                    return False
+                    
+            except TokenInvalid:
+                logger.warning("Token validation failed - TokenInvalid exception")
+                return False
+            except Exception as e:
+                logger.error(f"Token validation failed with exception: {str(e)}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error in mainLogic token validation: {str(e)}")
+            return False
+
     def validate_token_with_endpoint(self, token: str, random_id: str) -> bool:
-        """Validate token using the specific PW endpoint"""
+        """Validate token using the specific PW endpoint as fallback"""
         try:
             logger.info(f"Validating token with specific endpoint")
             
@@ -62,7 +102,6 @@ class PWDownloadBot:
             
             test_url = "https://api.penpencil.co/v3/batches/my-batches?mode=1&amount=paid&page=1"
             logger.info(f"Testing token with URL: {test_url}")
-            logger.debug(f"Headers: {json.dumps(tokencheckheaders, indent=2)}")
             
             import requests
             response = requests.get(test_url, headers=tokencheckheaders)
@@ -225,8 +264,13 @@ This bot helps you download videos from PhysicsWallah using your token.
             # Generate random ID automatically
             random_id = str(uuid.uuid4())
             
-            # Validate token with specific endpoint
-            if self.validate_token_with_endpoint(token, random_id):
+            # Validate token with mainLogic first, then fallback to endpoint
+            token_valid = self.validate_token_with_mainlogic(token, random_id)
+            if not token_valid:
+                logger.info("MainLogic validation failed, trying endpoint validation")
+                token_valid = self.validate_token_with_endpoint(token, random_id)
+            
+            if token_valid:
                 # Store user session
                 self.user_sessions[user_id] = {
                     "token": token,
@@ -277,8 +321,13 @@ This bot helps you download videos from PhysicsWallah using your token.
                     random_id = str(uuid.uuid4())  # Generate new random ID
                     
                     if access_token:
-                        # Validate token with specific endpoint
-                        if self.validate_token_with_endpoint(access_token, random_id):
+                        # Validate token with mainLogic first, then fallback to endpoint
+                        token_valid = self.validate_token_with_mainlogic(access_token, random_id)
+                        if not token_valid:
+                            logger.info("MainLogic validation failed, trying endpoint validation")
+                            token_valid = self.validate_token_with_endpoint(access_token, random_id)
+                        
+                        if token_valid:
                             # Store user session
                             self.user_sessions[user_id] = {
                                 "token": access_token,
@@ -621,6 +670,8 @@ This bot helps you download videos from PhysicsWallah using your token.
     def _run_main_download(self, video_id, name, batch_id, directory, state, token, random_id, progress_callback):
         """Run the main download using mainLogic Main class"""
         try:
+            logger.info(f"Starting mainLogic download for video_id: {video_id}, batch_id: {batch_id}")
+            
             # Create Main instance with all required parameters
             main_instance = Main(
                 id=video_id,
@@ -634,15 +685,17 @@ This bot helps you download videos from PhysicsWallah using your token.
                 mp4d=state['mp4decrypt'],
                 token=token,
                 random_id=random_id,
-                verbose=False,
+                verbose=True,  # Enable verbose for better logging
                 progress_callback=progress_callback
             )
             
             # Process the download
             main_instance.process()
+            logger.info("MainLogic download completed successfully")
             
         except Exception as e:
             logger.error(f"Main download failed: {str(e)}")
+            debugger.error(f"Main download failed: {str(e)}")
             raise
 
     async def start_download_from_link(self, message: Message, user_id: int, link: str):
